@@ -58,6 +58,13 @@ void loop() {
     Serial.println();
   }
 }
-/*
 
+/*
+DHT22 status codes:
+
+0 = OK           → Đọc thành công (ACK, 40 bit, CRC, giá trị hợp lệ)
+1 = ACK fail     → Cảm biến không phản hồi (sai dây / chưa cấp nguồn)
+2 = Timeout      → Lỗi khi đọc 40 bit (nhiễu / timing sai)
+3 = CRC fail     → Dữ liệu sai checksum
+4 = Range fail   → Giá trị T/H không hợp lệ hoặc biến động quá lớn
 */
