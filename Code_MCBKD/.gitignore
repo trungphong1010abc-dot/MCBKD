@@ -1,0 +1,41 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Build files
+*.bin
+*.elf
+*.map
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Python (nếu sau này dùng script)
+__pycache__/
+*.pyc
+
+# Arduino cache (nếu có)
+*.ino.cpp
+
+# Data / test output (nếu bạn log ra file)
+data/
+logs/
+
+# Large docs (tuỳ chọn nếu không muốn push)
+# *.pdf
+# *.pptx
+# *.docx
