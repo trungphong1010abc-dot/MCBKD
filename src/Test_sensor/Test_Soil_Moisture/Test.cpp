@@ -2,7 +2,7 @@
 
 // ================== GIÁ TRỊ HIỆU CHUẨN ==================
 // Sau khi chạy RUN_CALIB, copy giá trị ADC_DRY và ADC_WET mới vào đây.
-int ADC_DRY = 2975;
+int ADC_DRY = 3080;
 int ADC_WET = 1065;
 
 // ================== NGƯỠNG ADC HỢP LỆ ==================
