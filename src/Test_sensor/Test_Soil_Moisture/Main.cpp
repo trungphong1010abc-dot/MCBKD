@@ -1,15 +1,17 @@
 #include <Arduino.h>
-#include "soil_moisture.h"
+#include "Soil_Moisture.h"
 
-// thay đổi giữa chế độ calib và test bằng cách comment/uncomment 2 dòng define dưới đây
+// Chọn 1 trong 2 chế độ dưới đây
+
 //#define RUN_CALIB
-#define RUN_TEST 
+#define RUN_TEST
 
-// ifdef và endif dùng để chọn code nào sẽ được biên dịch dựa trên việc RUN_CALIB hay RUN_TEST được định nghĩa
 void setup() {
-#ifdef RUN_CALIB 
+#ifdef RUN_CALIB
   soilCalibSetup();
-#else
+#endif
+
+#ifdef RUN_TEST
   soilTestSetup();
 #endif
 }
@@ -17,28 +19,54 @@ void setup() {
 void loop() {
 #ifdef RUN_CALIB
   soilCalibLoop();
-#else
+#endif
+
+#ifdef RUN_TEST
   soilTestLoop();
 #endif
 }
 
 /*
+CÁCH DÙNG:
+
+1. Chạy hiệu chuẩn khô:
+   - Bật RUN_CALIB
+   - Để cảm biến ngoài không khí hoặc đất khô
+   - Mở Serial Monitor
+   - Copy giá trị ADC_CALIB vào ADC_DRY trong Test.cpp
+
+2. Chạy hiệu chuẩn ướt:
+   - Vẫn bật RUN_CALIB
+   - Cắm cảm biến vào đất ướt hoặc nước
+   - Không ngâm quá vạch đỏ
+   - Copy giá trị ADC_CALIB vào ADC_WET trong Test.cpp
+
+(Lưu ý: ADC_DRY phải lớn hơn ADC_WET, chạy hiệu chuẩn khô trước để đảm bảo điều này)
+
+3. Chạy test:
+   - Comment RUN_CALIB
+   - Bỏ comment RUN_TEST
+   - Upload lại code
+
+GIẢI THÍCH GIÁ TRỊ:
+
 ADC check:
-- Giá trị đọc thô 1 lần
-- Dùng để kiểm tra cảm biến có lỗi không
+- Giá trị ADC thô đọc 1 lần
+- Dùng để kiểm tra cảm biến có lỗi phần cứng không
 
 ADC_filtered:
-- Giá trị sau lọc median (ổn định hơn)
-- Dùng để tính toán
+- Giá trị ADC sau lọc median
+- Ổn định hơn ADC check
+- Dùng để tính độ ẩm
 
 Soil moisture H:
-- Độ ẩm đất (%)
-- Tính từ ADC_filtered
+- Độ ẩm đất tính theo phần trăm
 
 Buffer H:
-- Lưu lại giá trị H để dùng sau (IoT, vẽ graph...)
+- Giá trị độ ẩm lưu lại để sau này dùng cho IoT, Blynk, LoRa, vẽ graph
 
-LỖI HAY GẶP:
-- ADC_filtered > ADC_DRY → H bị âm → ép về 0%
-- => ADC_DRY đang set sai → cần calib lại
+LƯU Ý:
+- ADC_DRY phải lớn hơn ADC_WET
+- Nếu ADC_filtered > ADC_DRY thì H bị ép về 0%
+- Nếu ADC_filtered < ADC_WET thì H bị ép về 100%
 */
