@@ -18,6 +18,19 @@
 extern int ADC_DRY;
 extern int ADC_WET;
 
+// ================== TRẠNG THÁI CẢM BIẾN ==================
+enum SoilStatus {
+  SOIL_STATUS_OK,
+  SOIL_STATUS_ERROR
+};
+
+// ================== DỮ LIỆU CẢM BIẾN ==================
+struct SoilData {
+  float H_soil;           // Độ ẩm đất (%Vol)
+  const char* unit = "%Vol";
+  SoilStatus status;
+};
+
 // ================== HÀM DÙNG CHUNG ==================
 void soilInit();
 

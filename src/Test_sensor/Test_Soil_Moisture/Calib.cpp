@@ -89,23 +89,28 @@ void soilCalibSetup() {
 }
 
 void soilCalibLoop() {
+  // Thu thập dữ liệu N mẫu dùng định câm biến
   int adcCalib = readCalibrationADC();
 
+  // Lọc nhiễu Median filter + xử lý outlier (bỏ 10% min, 10% max)
   Serial.print("ADC_CALIB = ");
   Serial.println(adcCalib);
 
   Serial.println();
-  Serial.println("Neu dang de cam bien kho:");
+  Serial.println("===== CALIB INSTRUCTIONS =====");
+  Serial.println("If sensor is DRY (in air or dry soil):");
   Serial.print("int ADC_DRY = ");
   Serial.print(adcCalib);
   Serial.println(";");
 
-  Serial.println("Neu dang de cam bien uot:");
+  Serial.println();
+  Serial.println("If sensor is WET (in wet soil or water):");
   Serial.print("int ADC_WET = ");
   Serial.print(adcCalib);
   Serial.println(";");
 
-  Serial.println();
+  Serial.println("Note: ADC_DRY must be > ADC_WET");
+  Serial.println("=============================\n");
 
   delay(CALIB_LOOP_DELAY_MS);
 }

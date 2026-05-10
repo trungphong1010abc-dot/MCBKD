@@ -3,15 +3,9 @@
 
 DHT22Sensor dht;
 
-const char* statusText(uint8_t status) {
-  switch (status) {
-    case 0: return "OK";
-    case 1: return "ACK fail";
-    case 2: return "Timeout read";
-    case 3: return "CRC fail";
-    case 4: return "Range fail";
-    default: return "Unknown";
-  }
+const char* statusText(DHT22Status status) {
+  if (status == DHT22_STATUS_OK) return "OK";
+  return "ERROR";
 }
 
 void setup() {
@@ -20,51 +14,42 @@ void setup() {
 
   Serial.println("===== DHT22 TEST =====");
 
-  dht.begin();
+  dht.begin(); // Khởi tạo DHT22
 }
 
 void loop() {
-  if (!dht.ready()) return;
+  if (!dht.ready()) {
+    return; // Chưa đến chu kỳ đo thì thoát loop
+  }
 
-  DHT22Data d = dht.read();
+  DHT22Data data = dht.read();
 
-  if (d.status == 0) {
+  if (data.status == DHT22_STATUS_OK) {
     Serial.println("---- DATA ----");
 
-    Serial.print("Status: ");
-    Serial.print(d.status);
-    Serial.print(" (");
-    Serial.print(statusText(d.status));
-    Serial.println(")");
+    Serial.print("DHT22_status: ");
+    Serial.println(statusText(data.status));
 
-    Serial.print("T: ");
-    Serial.print(d.temperature, 1);
+    Serial.print("T_air: ");
+    Serial.print(data.T_air, 1);
     Serial.println(" C");
 
-    Serial.print("H: ");
-    Serial.print(d.humidity, 1);
-    Serial.println(" %");
+    Serial.print("H_air: ");
+    Serial.print(data.H_air, 1);
+    Serial.println(" %RH");
 
     Serial.println();
   } else {
     Serial.println("---- ERROR ----");
 
-    Serial.print("Status: ");
-    Serial.print(d.status);
-    Serial.print(" (");
-    Serial.print(statusText(d.status));
-    Serial.println(")");
+    Serial.print("DHT22_status: ");
+    Serial.println(statusText(data.status));
+
+    Serial.println("DHT22 read/range failed");
+    Serial.println("Bo mau hien tai, retry o chu ky sau");
 
     Serial.println();
   }
+
+  delay(2000); // Delay chu kỳ đo
 }
-
-/*
-DHT22 status codes:
-
-0 = OK           → Đọc thành công (ACK, 40 bit, CRC, giá trị hợp lệ)
-1 = ACK fail     → Cảm biến không phản hồi (sai dây / chưa cấp nguồn)
-2 = Timeout      → Lỗi khi đọc 40 bit (nhiễu / timing sai)
-3 = CRC fail     → Dữ liệu sai checksum
-4 = Range fail   → Giá trị T/H không hợp lệ hoặc biến động quá lớn
-*/

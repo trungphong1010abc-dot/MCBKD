@@ -6,7 +6,6 @@
 
 // ================= CONFIG =================
 #define DHT22_PIN 14
-
 #define READ_INTERVAL 2000
 #define TIMEOUT_US 250
 
@@ -22,64 +21,88 @@
 
 #define TEMP_DELTA_MAX 1.0
 
+// ================= STATUS =================
+enum DHT22Status {
+  DHT22_STATUS_OK,
+  DHT22_STATUS_ERROR
+};
+
 // ================= DATA =================
 struct DHT22Data {
-  float temperature;
-  float humidity;
-  uint8_t status;
+  float T_air;
+  float H_air;
+  DHT22Status status;
 };
 
 class DHT22Sensor {
 private:
   uint8_t pin;
 
-  float tempBuf[FILTER_SIZE];
-  float humBuf[FILTER_SIZE];
+  float T_buffer[FILTER_SIZE];
+  float H_buffer[FILTER_SIZE];
 
-  uint8_t idx = 0;
+  uint8_t index = 0;
   uint8_t count = 0;
 
   float T_prev = NAN;
-
   unsigned long lastRead = 0;
 
 private:
   bool waitLevel(uint8_t level) {
-    uint32_t t = micros();
+    uint32_t start = micros();
+
     while (digitalRead(pin) != level) {
-      if (micros() - t > TIMEOUT_US) return false;
+      if (micros() - start > TIMEOUT_US) return false; // Timeout khi chờ mức tín hiệu
     }
+
     return true;
   }
 
   uint32_t readHighTime() {
-    uint32_t t = micros();
-
-    while (digitalRead(pin) == LOW) {
-      if (micros() - t > TIMEOUT_US) return 0;
-    }
-
     uint32_t start = micros();
 
-    while (digitalRead(pin) == HIGH) {
+    while (digitalRead(pin) == LOW) {
       if (micros() - start > TIMEOUT_US) return 0;
     }
 
-    return micros() - start;
+    uint32_t highStart = micros();
+
+    while (digitalRead(pin) == HIGH) {
+      if (micros() - highStart > TIMEOUT_US) return 0;
+    }
+
+    return micros() - highStart; // Độ rộng xung HIGH dùng để xác định bit 0/1
   }
 
-  float avg(float *buf, uint8_t n) {
-    float s = 0;
-    for (int i = 0; i < n; i++) s += buf[i];
-    return s / n;
-  }
+  void pushBuffer(float T, float H) {
+    T_buffer[index] = T;
+    H_buffer[index] = H;
 
-  void push(float T, float H) {
-    tempBuf[idx] = T;
-    humBuf[idx] = H;
+    index = (index + 1) % FILTER_SIZE;
 
-    idx = (idx + 1) % FILTER_SIZE;
     if (count < FILTER_SIZE) count++;
+  }
+
+  float average(float *buffer, uint8_t n) {
+    float sum = 0;
+
+    for (uint8_t i = 0; i < n; i++) {
+      sum += buffer[i];
+    }
+
+    return sum / n;
+  }
+
+  float round01(float value) {
+    return roundf(value * 10.0) / 10.0; // Làm tròn đến 0.1
+  }
+
+  DHT22Data makeError() {
+    DHT22Data data;
+    data.T_air = NAN;
+    data.H_air = NAN;
+    data.status = DHT22_STATUS_ERROR;
+    return data;
   }
 
 public:
@@ -89,17 +112,19 @@ public:
 
   void begin() {
     pinMode(pin, OUTPUT);
-    digitalWrite(pin, HIGH);
+    digitalWrite(pin, HIGH); // Bus DATA ở trạng thái HIGH ban đầu
 
-    for (int i = 0; i < FILTER_SIZE; i++) {
-      tempBuf[i] = 0;
-      humBuf[i] = 0;
+    for (uint8_t i = 0; i < FILTER_SIZE; i++) {
+      T_buffer[i] = 0;
+      H_buffer[i] = 0;
     }
 
-    lastRead = 0;
+    index = 0;
+    count = 0;
     T_prev = NAN;
+    lastRead = 0;
 
-    delay(2000); // ổn định cảm biến
+    delay(2000); // Chờ DHT22 ổn định
   }
 
   bool ready() {
@@ -107,14 +132,13 @@ public:
   }
 
   DHT22Data read() {
-    DHT22Data out;
-    out.status = 2;
-
-    if (!ready()) return out;
+    if (!ready()) {
+      return makeError();
+    }
 
     lastRead = millis();
 
-    uint8_t data[5] = {0};
+    uint8_t B[5] = {0};
 
     // ================= START SIGNAL =================
     pinMode(pin, OUTPUT);
@@ -122,87 +146,94 @@ public:
     delay(10);
 
     digitalWrite(pin, LOW);
-    delay(18);
+    delay(18); // MCU kéo LOW 18ms để gửi tín hiệu START
 
     digitalWrite(pin, HIGH);
     delayMicroseconds(30);
-    pinMode(pin, INPUT_PULLUP);
+
+    pinMode(pin, INPUT_PULLUP); // Chuyển sang INPUT để chờ DHT22 phản hồi
 
     // ================= ACK =================
     if (!waitLevel(LOW) || !waitLevel(HIGH) || !waitLevel(LOW)) {
-      out.status = 1;
-      return out;
+      return makeError();
     }
 
-    // ================= READ 40 BIT =================
-    for (int i = 0; i < 40; i++) {
-      uint32_t t = readHighTime();
-      if (t == 0) {
-        out.status = 2;
-        return out;
+    // ================= READ 40 BIT / 5 BYTE =================
+    for (uint8_t i = 0; i < 40; i++) {
+      uint32_t highTime = readHighTime();
+
+      if (highTime == 0) {
+        return makeError();
       }
 
-      data[i / 8] <<= 1;
-      if (t > 40) data[i / 8] |= 1;
+      B[i / 8] <<= 1;
+
+      if (highTime > 40) {
+        B[i / 8] |= 1; // Xung HIGH dài hơn 40us thì xem là bit 1
+      }
     }
 
-    uint8_t b0 = data[0];
-    uint8_t b1 = data[1];
-    uint8_t b2 = data[2];
-    uint8_t b3 = data[3];
-    uint8_t b4 = data[4];
+    uint8_t humH = B[0]; // Hum_H
+    uint8_t humL = B[1]; // Hum_L
+    uint8_t tempH = B[2]; // Temp_H
+    uint8_t tempL = B[3]; // Temp_L
+    uint8_t crc = B[4]; // CRC
 
-    // ================= CRC =================
-    uint8_t sum = (b0 + b1 + b2 + b3) & 0xFF;
-    if (sum != b4) {
-      out.status = 3;
-      return out;
+    // ================= CRC CHECK =================
+    uint8_t checksum = (humH + humL + tempH + tempL) & 0xFF;
+
+    if (checksum != crc) {
+      return makeError();
     }
 
-    // ================= T =================
-    uint16_t rawT = ((b2 & 0x7F) << 8) | b3;
-    float T = rawT / 10.0;
+    // ================= TÍNH NHIỆT ĐỘ =================
+    uint16_t rawT = ((tempH & 0x7F) << 8) | tempL;
+    float T_air = rawT / 10.0;
 
-    if (b2 & 0x80) T = -T;
-
-    // ================= H =================
-    float H = ((b0 << 8) | b1) / 10.0;
-
-    // ================= OFFSET =================
-    T += TEMP_OFFSET;
-    H += HUM_OFFSET;
-
-    // ================= RANGE =================
-    if (T < TEMP_MIN || T > TEMP_MAX) {
-      out.status = 4;
-      return out;
+    if (tempH & 0x80) {
+      T_air = -T_air;
     }
 
-    if (H < HUM_MIN || H > HUM_MAX) {
-      out.status = 4;
-      return out;
+    // ================= TÍNH ĐỘ ẨM =================
+    float H_air = ((humH << 8) | humL) / 10.0;
+
+    // ================= OFFSET HIỆU CHỈNH =================
+    T_air = T_air + TEMP_OFFSET;
+    H_air = H_air + HUM_OFFSET;
+
+    // ================= KIỂM TRA DỮ LIỆU HỢP LỆ =================
+    if (T_air < TEMP_MIN || T_air > TEMP_MAX) {
+      return makeError();
+    }
+
+    if (H_air < HUM_MIN || H_air > HUM_MAX) {
+      return makeError();
     }
 
     if (!isnan(T_prev)) {
-      if (fabs(T - T_prev) > TEMP_DELTA_MAX) {
-        out.status = 4;
-        return out;
+      if (fabs(T_air - T_prev) > TEMP_DELTA_MAX) {
+        return makeError();
       }
     }
 
-    // ================= FILTER =================
-    push(T, H);
+    // ================= MOVING AVERAGE N = 5 =================
+    pushBuffer(T_air, H_air);
 
-    float Tf = avg(tempBuf, count);
-    float Hf = avg(humBuf, count);
+    float T_flt = average(T_buffer, count);
+    float H_flt = average(H_buffer, count);
 
-    T_prev = Tf;
+    T_flt = round01(T_flt);
+    H_flt = round01(H_flt);
 
-    out.temperature = Tf;
-    out.humidity = Hf;
-    out.status = 0;
+    T_prev = T_flt;
 
-    return out;
+    // ================= LƯU / XUẤT DATA =================
+    DHT22Data data;
+    data.T_air = T_flt;
+    data.H_air = H_flt;
+    data.status = DHT22_STATUS_OK;
+
+    return data;
   }
 };
 

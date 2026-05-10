@@ -2,8 +2,8 @@
 
 // ================== GIÁ TRỊ HIỆU CHUẨN ==================
 // Sau khi chạy RUN_CALIB, copy giá trị ADC_DRY và ADC_WET mới vào đây.
-int ADC_DRY = 3080;
-int ADC_WET = 1065;
+int ADC_DRY = 3200;
+int ADC_WET = 1400;
 
 // ================== NGƯỠNG ADC HỢP LỆ ==================
 const int ADC_MIN = 100;
@@ -65,11 +65,14 @@ int readSoilMedian() {
 }
 
 float adcToMoisturePercent(int adcFiltered) {
-  float H = (float)(ADC_DRY - adcFiltered) * 100.0 /
+  // Công thức: H_soil = (ADC_dry - ADC_filtered) × 60 / (ADC_dry - ADC_wet)
+  // Độ ẩm tối đa là 60%Vol
+  float H = (float)(ADC_DRY - adcFiltered) * 60.0 /
             (float)(ADC_DRY - ADC_WET);
 
+  // Giới hạn H_soil: 0 <= H <= 60
   if (H < 0) H = 0;
-  if (H > 100) H = 100;
+  if (H > 60) H = 60;
 
   return H;
 }
@@ -132,21 +135,28 @@ void soilTestLoop() {
 
   adcErrorCount = 0;
 
+  // Thu thập dữ liệu N mẫu, bỏ 3 mẫu dùng định câm biến
   int adcFiltered = readSoilMedian();
+  
+  // Lọc nhiễu Median filter -> ADC_filtered
+  // Tính độ ẩm đất H_soil(%Vol)
   float H = adcToMoisturePercent(adcFiltered);
 
   soilBuffer = H;
 
+  // Xuất dữ liệu: Serial: ADC_filtered, H_soil(%Vol)
+  Serial.println("---- DATA ----");
+  
   Serial.print("ADC_filtered: ");
   Serial.println(adcFiltered);
 
-  Serial.print("Soil moisture H: ");
+  Serial.print("Soil moisture H_soil: ");
   Serial.print(H, 1);
-  Serial.println(" %");
+  Serial.println(" %Vol");
 
-  Serial.print("Buffer H: ");
-  Serial.print(soilBuffer, 1);
-  Serial.println(" %");
+  Serial.println("Soil_status: OK");
+  Serial.println();
 
+  // Delay chư kỳ đo 2s
   delay(LOOP_DELAY_MS);
 }
