@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <LoRa.h>
+#include <Preferences.h>
 #include <SPI.h>
 
 #include "dht22_sensor.h"
@@ -12,6 +13,44 @@ RTC_DATA_ATTR uint32_t rtcSleepMinutes = Config::DefaultSleepMinutes;
 
 static Dht22Sensor dht22;
 static SoilMoistureSensor soilSensor;
+static Preferences preferences;
+
+struct NodeRuntimeConfig
+{
+    int soilThresholdVol = 20;
+    uint32_t sleepMinutes = Config::DefaultSleepMinutes;
+    int filterMode = 0;  // 0=AVERAGE, 1=MEDIAN.
+    int pumpSeconds = 5;
+    int controlMode = 1; // 0=MANUAL, 1=AUTO.
+    int dutyCycleMode = 1; // 0=FIXED, 1=ADAPTIVE.
+};
+
+static NodeRuntimeConfig runtimeConfig;
+
+static void loadRuntimeConfig()
+{
+    preferences.begin("node_cfg", true);
+    runtimeConfig.soilThresholdVol = preferences.getInt("soil_th", runtimeConfig.soilThresholdVol);
+    runtimeConfig.sleepMinutes = preferences.getUInt("sleep_min", runtimeConfig.sleepMinutes);
+    runtimeConfig.filterMode = preferences.getInt("filter", runtimeConfig.filterMode);
+    runtimeConfig.pumpSeconds = preferences.getInt("pump_s", runtimeConfig.pumpSeconds);
+    runtimeConfig.controlMode = preferences.getInt("ctrl", runtimeConfig.controlMode);
+    runtimeConfig.dutyCycleMode = preferences.getInt("duty", runtimeConfig.dutyCycleMode);
+    preferences.end();
+    rtcSleepMinutes = runtimeConfig.sleepMinutes;
+}
+
+static void saveRuntimeConfig()
+{
+    preferences.begin("node_cfg", false);
+    preferences.putInt("soil_th", runtimeConfig.soilThresholdVol);
+    preferences.putUInt("sleep_min", runtimeConfig.sleepMinutes);
+    preferences.putInt("filter", runtimeConfig.filterMode);
+    preferences.putInt("pump_s", runtimeConfig.pumpSeconds);
+    preferences.putInt("ctrl", runtimeConfig.controlMode);
+    preferences.putInt("duty", runtimeConfig.dutyCycleMode);
+    preferences.end();
+}
 
 static void setPump(bool enabled)
 {
@@ -112,7 +151,115 @@ static uint32_t computeAdaptiveSleepSeconds(const TelemetryPacket &telemetry)
         return Config::FastUrgentSleepSeconds;
     }
 
+    if (runtimeConfig.dutyCycleMode == 0)
+    {
+        return runtimeConfig.sleepMinutes * 60UL;
+    }
     return computeAdaptiveSleepMinutes(telemetry) * 60UL;
+}
+
+static void sendOtaStatus(uint32_t otaId, uint16_t chunkIndex, bool ok, const String &status)
+{
+    OtaStatusPacket packet;
+    packet.nodeId = Config::NodeId;
+    packet.otaId = otaId;
+    packet.chunkIndex = chunkIndex;
+    packet.ok = ok;
+    packet.status = status;
+
+    const String payload = encodeOtaStatus(packet);
+    LoRa.beginPacket();
+    LoRa.print(payload);
+    LoRa.endPacket(true);
+    delay(100);
+    LoRa.receive();
+    Serial.print("OTA STATUS TX: ");
+    Serial.println(payload);
+}
+
+static bool waitForOtaChunk(uint32_t otaId, uint16_t expectedIndex, OtaChunkPacket &chunk)
+{
+    const uint32_t start = millis();
+    while (millis() - start < 6000)
+    {
+        const int packetSize = LoRa.parsePacket();
+        if (packetSize <= 0)
+        {
+            delay(10);
+            continue;
+        }
+
+        String line;
+        while (LoRa.available())
+        {
+            line += char(LoRa.read());
+        }
+
+        if (!decodeOtaChunk(line, chunk))
+        {
+            Serial.print("OTA chunk invalid: ");
+            Serial.println(line);
+            sendOtaStatus(otaId, expectedIndex, false, "NACK_BAD_PACKET");
+            continue;
+        }
+        if (chunk.nodeId != Config::NodeId || chunk.otaId != otaId || chunk.chunkIndex != expectedIndex)
+        {
+            Serial.println("OTA chunk ignored: node/ota/index mismatch");
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+static void runSimulatedLoraOta(uint32_t otaId)
+{
+    if (otaId == 0)
+    {
+        otaId = rtcPacketId;
+    }
+
+    Serial.printf("START_OTA session ota_id=%lu\n", otaId);
+    sendOtaStatus(otaId, 0, true, "OTA_READY");
+
+    uint16_t expectedTotal = 0;
+    uint16_t receivedChunks = 0;
+    uint16_t firmwareCrc = 0xFFFF;
+
+    while (true)
+    {
+        OtaChunkPacket chunk;
+        if (!waitForOtaChunk(otaId, receivedChunks + 1, chunk))
+        {
+            sendOtaStatus(otaId, receivedChunks + 1, false, "OTA_FAILED_TIMEOUT");
+            return;
+        }
+
+        const uint16_t actualDataCrc = crc16Ccitt(chunk.payloadData);
+        if (actualDataCrc != chunk.dataCrc)
+        {
+            Serial.printf("OTA chunk CRC fail idx=%u expected=%04X actual=%04X\n",
+                          chunk.chunkIndex, chunk.dataCrc, actualDataCrc);
+            sendOtaStatus(otaId, chunk.chunkIndex, false, "NACK_CRC");
+            continue;
+        }
+
+        if (expectedTotal == 0)
+        {
+            expectedTotal = chunk.totalChunks;
+        }
+        firmwareCrc = crc16Ccitt(reinterpret_cast<const uint8_t *>(chunk.payloadData.c_str()),
+                                 chunk.payloadData.length()) ^ firmwareCrc;
+        receivedChunks++;
+        sendOtaStatus(otaId, chunk.chunkIndex, true, "ACK");
+
+        if (receivedChunks >= expectedTotal)
+        {
+            Serial.printf("OTA simulated firmware CRC=%04X chunks=%u\n", firmwareCrc, receivedChunks);
+            sendOtaStatus(otaId, receivedChunks, true, "OTA_SUCCESS");
+            return;
+        }
+    }
 }
 
 static void executeCommand(const AckPacket &ack)
@@ -128,8 +275,35 @@ static void executeCommand(const AckPacket &ack)
         if (ack.parameter >= 5 && ack.parameter <= 90)
         {
             rtcSleepMinutes = ack.parameter;
+            runtimeConfig.sleepMinutes = ack.parameter;
+            saveRuntimeConfig();
             Serial.printf("Command SET_SLEEP_DURATION: %lu min\n", rtcSleepMinutes);
         }
+        break;
+    case CommandType::SetThreshold:
+        runtimeConfig.soilThresholdVol = constrain(ack.parameter, 0, 100);
+        saveRuntimeConfig();
+        Serial.printf("Command SET_THRESHOLD: soil_min=%d %%Vol\n", runtimeConfig.soilThresholdVol);
+        break;
+    case CommandType::SetFilterMode:
+        runtimeConfig.filterMode = constrain(ack.parameter, 0, 1);
+        saveRuntimeConfig();
+        Serial.printf("Command SET_FILTER_MODE: %s\n", runtimeConfig.filterMode == 1 ? "MEDIAN" : "AVERAGE");
+        break;
+    case CommandType::SetPumpTime:
+        runtimeConfig.pumpSeconds = constrain(ack.parameter, 0, int(Config::MaxPumpSeconds));
+        saveRuntimeConfig();
+        Serial.printf("Command SET_PUMP_TIME: %d s\n", runtimeConfig.pumpSeconds);
+        break;
+    case CommandType::SetControlMode:
+        runtimeConfig.controlMode = constrain(ack.parameter, 0, 1);
+        saveRuntimeConfig();
+        Serial.printf("Command SET_CONTROL_MODE: %s\n", runtimeConfig.controlMode == 1 ? "AUTO" : "MANUAL");
+        break;
+    case CommandType::SetDutyCycle:
+        runtimeConfig.dutyCycleMode = constrain(ack.parameter, 0, 1);
+        saveRuntimeConfig();
+        Serial.printf("Command SET_DUTY_CYCLE: %s\n", runtimeConfig.dutyCycleMode == 1 ? "ADAPTIVE" : "FIXED");
         break;
     case CommandType::SleepNow:
         Serial.println("Command SLEEP_NOW");
@@ -148,7 +322,7 @@ static void executeCommand(const AckPacket &ack)
         break;
     }
     case CommandType::StartOta:
-        Serial.println("Command START_OTA received; OTA-over-LoRa handler is reserved for firmware chunk flow");
+        runSimulatedLoraOta(uint32_t(ack.parameter));
         break;
     default:
         break;
@@ -260,6 +434,11 @@ void setup()
 
     Serial.println("===== EE4552 NODE FIRMWARE =====");
     Serial.printf("Wake cause: %d\n", int(esp_sleep_get_wakeup_cause()));
+    loadRuntimeConfig();
+    Serial.printf("Config: soil_threshold=%d sleep=%lu filter=%d pump=%d control=%d duty=%d\n",
+                  runtimeConfig.soilThresholdVol, runtimeConfig.sleepMinutes,
+                  runtimeConfig.filterMode, runtimeConfig.pumpSeconds,
+                  runtimeConfig.controlMode, runtimeConfig.dutyCycleMode);
 
     dht22.begin(Config::DhtPin, Config::TempOffsetC, Config::HumidityOffsetRh);
     soilSensor.begin(Config::SoilAdcPin, Config::SoilAdcDry, Config::SoilAdcWet,
