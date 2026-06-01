@@ -1,4 +1,4 @@
-# Giải thích flowchart soil_moisture
+# Giải thích soil_moisture
 
 ## Wiring
 
@@ -16,3 +16,4 @@ GPIO34
 GPIO35
 GPIO36
 GPIO39
+![alt text](image.png)

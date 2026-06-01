@@ -6,7 +6,7 @@
 | ------------ | -------- |
 | `+` / VCC    | `3V3`    |
 | `-` / GND    | `GND`    |
-| `OUT` / DATA | `GPIO14` |
+| `OUT` / DATA | `GPIO27` |
 
 Các chân nên dùng cho DHT22:
 
