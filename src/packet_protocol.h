@@ -36,6 +36,12 @@ struct TelemetryPacket
     int adcFiltered = 0;
     uint8_t errorFlag = 0;
     String soilStatus;
+    uint32_t configSleepMinutes = 0;
+    int configSoilThresholdVol = 0;
+    int configFilterMode = 0;
+    int configPumpSeconds = 0;
+    int configControlMode = 0;
+    int configDutyCycleMode = 0;
 };
 
 struct AckPacket

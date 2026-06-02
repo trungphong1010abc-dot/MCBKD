@@ -154,6 +154,8 @@ ADC_wet = 1200
 
 ## 7. Đo điện áp pin
 
+![Mạch chia áp](Voltage_divider_circuit.png)
+
 Node đo pin bằng `GPIO35` qua mạch chia áp `220k/100k`.
 
 Thuật toán trong `readBatteryVoltage()`:

@@ -5,7 +5,7 @@
 namespace Config
 {
 constexpr uint32_t SerialBaud = 115200;
-constexpr char GatewayFirmwareVersion[] = "GW_OTA_TEST_1";
+constexpr char GatewayFirmwareVersion[] = "GW_OTA_TEST_2";
 
 constexpr uint8_t NodeId = 1;
 constexpr uint8_t GatewayId = 1;
@@ -54,4 +54,7 @@ constexpr char ThingsBoardHost[] = "eu.thingsboard.cloud";
 constexpr char ThingsBoardToken[] = "QYtNEEPckyFjPteWRQ9o";
 constexpr uint16_t ThingsBoardHttpPort = 80;
 constexpr bool EnableCloudUpload = true;
+
+constexpr bool EnableGatewayHttpDebug = false;
+constexpr bool EnableGatewayHeartbeatLog = false;
 }

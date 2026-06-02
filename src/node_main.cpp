@@ -170,7 +170,7 @@ static void sendOtaStatus(uint32_t otaId, uint16_t chunkIndex, bool ok, const St
     const String payload = encodeOtaStatus(packet);
     LoRa.beginPacket();
     LoRa.print(payload);
-    LoRa.endPacket(true);
+    LoRa.endPacket();
     delay(100);
     LoRa.receive();
     Serial.print("OTA STATUS TX: ");
@@ -466,6 +466,12 @@ void setup()
     telemetry.adcFiltered = soil.adcFiltered;
     telemetry.errorFlag = dht.errorFlag || soil.errorFlag;
     telemetry.soilStatus = SoilMoistureSensor::statusText(soil.soilStatus);
+    telemetry.configSleepMinutes = runtimeConfig.sleepMinutes;
+    telemetry.configSoilThresholdVol = runtimeConfig.soilThresholdVol;
+    telemetry.configFilterMode = runtimeConfig.filterMode;
+    telemetry.configPumpSeconds = runtimeConfig.pumpSeconds;
+    telemetry.configControlMode = runtimeConfig.controlMode;
+    telemetry.configDutyCycleMode = runtimeConfig.dutyCycleMode;
 
     Serial.printf("DHT: T=%.1f C H=%.1f %%RH ERR=%u\n", telemetry.temperatureC,
                   telemetry.humidityRh, dht.errorFlag);

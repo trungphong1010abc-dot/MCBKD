@@ -95,6 +95,12 @@ String encodeTelemetry(const TelemetryPacket &packet)
     base += ",ADC=" + String(packet.adcFiltered);
     base += ",SOIL=" + packet.soilStatus;
     base += ",ERR=" + String(packet.errorFlag);
+    base += ",CSLEEP=" + String(packet.configSleepMinutes);
+    base += ",CTH=" + String(packet.configSoilThresholdVol);
+    base += ",CFILTER=" + String(packet.configFilterMode);
+    base += ",CPUMP=" + String(packet.configPumpSeconds);
+    base += ",CMODE=" + String(packet.configControlMode);
+    base += ",CDUTY=" + String(packet.configDutyCycleMode);
     base.toUpperCase();
     base += ",CRC=" + String(crc16Ccitt(base), HEX);
     base.toUpperCase();
@@ -160,6 +166,12 @@ bool decodeTelemetry(const String &line, TelemetryPacket &packet)
     packet.adcFiltered = getField(line, "ADC").toInt();
     packet.soilStatus = getField(line, "SOIL");
     packet.errorFlag = uint8_t(getField(line, "ERR").toInt());
+    packet.configSleepMinutes = uint32_t(getField(line, "CSLEEP").toInt());
+    packet.configSoilThresholdVol = getField(line, "CTH").toInt();
+    packet.configFilterMode = getField(line, "CFILTER").toInt();
+    packet.configPumpSeconds = getField(line, "CPUMP").toInt();
+    packet.configControlMode = getField(line, "CMODE").toInt();
+    packet.configDutyCycleMode = getField(line, "CDUTY").toInt();
     return packet.nodeId > 0 && packet.packetId > 0;
 }
 
@@ -221,7 +233,20 @@ bool hasValidCrc(const String &line)
 String getField(const String &line, const String &key)
 {
     const String token = key + "=";
-    int start = line.indexOf(token);
+    int start = -1;
+    if (line.startsWith(token))
+    {
+        start = 0;
+    }
+    else
+    {
+        start = line.indexOf("," + token);
+        if (start >= 0)
+        {
+            start += 1;
+        }
+    }
+
     if (start < 0)
     {
         return "";
