@@ -40,7 +40,6 @@ constexpr uint8_t LoraCodingRate = 5;
 constexpr uint8_t LoraTxPowerDbm = 17;
 
 constexpr uint16_t AckTimeoutMs = 2500;
-constexpr uint8_t MaxRetry = 3;
 constexpr uint16_t CommandDedupWindow = 32;
 
 constexpr bool EnableDeepSleep = true;

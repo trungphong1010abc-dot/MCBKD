@@ -98,8 +98,8 @@ static bool waitForOtaStatus(uint8_t nodeId, uint32_t otaId, uint16_t chunkIndex
     return false;
 }
 
-static bool sendOtaChunkWithRetry(uint8_t nodeId, uint32_t otaId, uint16_t index,
-                                  uint16_t total, const String &data)
+static bool sendOtaChunk(uint8_t nodeId, uint32_t otaId, uint16_t index,
+                         uint16_t total, const String &data)
 {
     OtaChunkPacket chunk;
     chunk.nodeId = nodeId;
@@ -110,23 +110,15 @@ static bool sendOtaChunkWithRetry(uint8_t nodeId, uint32_t otaId, uint16_t index
     chunk.dataCrc = crc16Ccitt(data);
 
     const String payload = encodeOtaChunk(chunk);
-    for (uint8_t retry = 0; retry < Config::MaxRetry; retry++)
-    {
-        Serial.printf("OTA CHUNK TX idx=%u try=%u: %s\n", index, retry + 1, payload.c_str());
-        LoRa.beginPacket();
-        LoRa.print(payload);
-        LoRa.endPacket();
-        delay(150);
-        LoRa.receive();
+    Serial.printf("OTA CHUNK TX idx=%u: %s\n", index, payload.c_str());
+    LoRa.beginPacket();
+    LoRa.print(payload);
+    LoRa.endPacket();
+    delay(150);
+    LoRa.receive();
 
-        OtaStatusPacket status;
-        if (waitForOtaStatus(nodeId, otaId, index, "ACK", status))
-        {
-            return true;
-        }
-        delay(300);
-    }
-    return false;
+    OtaStatusPacket status;
+    return waitForOtaStatus(nodeId, otaId, index, "ACK", status);
 }
 
 static void runSimulatedLoraOtaTransfer(uint8_t nodeId, uint32_t otaId)
@@ -155,7 +147,7 @@ static void runSimulatedLoraOtaTransfer(uint8_t nodeId, uint32_t otaId)
     constexpr uint16_t totalChunks = sizeof(chunks) / sizeof(chunks[0]);
     for (uint16_t i = 0; i < totalChunks; i++)
     {
-        if (!sendOtaChunkWithRetry(nodeId, otaId, i + 1, totalChunks, chunks[i]))
+        if (!sendOtaChunk(nodeId, otaId, i + 1, totalChunks, chunks[i]))
         {
             Serial.printf("OTA session failed at chunk %u\n", i + 1);
             otaSessionActive = false;

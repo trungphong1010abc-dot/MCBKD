@@ -59,35 +59,31 @@ static void setPump(bool enabled)
 
 static bool initLoRa()
 {
-    for (uint8_t attempt = 1; attempt <= 3; attempt++)
+    LoRa.end();
+    SPI.end();
+    delay(50);
+
+    pinMode(Config::LoraSs, OUTPUT);
+    digitalWrite(Config::LoraSs, HIGH);
+    pinMode(Config::LoraRst, OUTPUT);
+    digitalWrite(Config::LoraRst, LOW);
+    delay(50);
+    digitalWrite(Config::LoraRst, HIGH);
+    delay(200);
+
+    SPI.begin(Config::LoraSck, Config::LoraMiso, Config::LoraMosi, Config::LoraSs);
+    LoRa.setPins(Config::LoraSs, Config::LoraRst, Config::LoraDio0);
+    if (!LoRa.begin(Config::LoraFrequency))
     {
-        LoRa.end();
-        SPI.end();
-        delay(50);
-
-        pinMode(Config::LoraSs, OUTPUT);
-        digitalWrite(Config::LoraSs, HIGH);
-        pinMode(Config::LoraRst, OUTPUT);
-        digitalWrite(Config::LoraRst, LOW);
-        delay(50);
-        digitalWrite(Config::LoraRst, HIGH);
-        delay(200);
-
-        SPI.begin(Config::LoraSck, Config::LoraMiso, Config::LoraMosi, Config::LoraSs);
-        LoRa.setPins(Config::LoraSs, Config::LoraRst, Config::LoraDio0);
-        if (LoRa.begin(Config::LoraFrequency))
-        {
-            LoRa.setSpreadingFactor(Config::LoraSpreadingFactor);
-            LoRa.setSignalBandwidth(Config::LoraSignalBandwidth);
-            LoRa.setCodingRate4(Config::LoraCodingRate);
-            LoRa.setTxPower(Config::LoraTxPowerDbm);
-            LoRa.enableCrc();
-            return true;
-        }
-
-        Serial.printf("LoRa init retry %u failed\n", attempt);
+        return false;
     }
-    return false;
+
+    LoRa.setSpreadingFactor(Config::LoraSpreadingFactor);
+    LoRa.setSignalBandwidth(Config::LoraSignalBandwidth);
+    LoRa.setCodingRate4(Config::LoraCodingRate);
+    LoRa.setTxPower(Config::LoraTxPowerDbm);
+    LoRa.enableCrc();
+    return true;
 }
 
 static float readBatteryVoltage()
@@ -369,25 +365,19 @@ static bool waitForAck(uint32_t packetId)
     return false;
 }
 
-static bool sendTelemetryWithRetry(const TelemetryPacket &telemetry)
+static bool sendTelemetry(const TelemetryPacket &telemetry)
 {
     const String payload = encodeTelemetry(telemetry);
-    for (uint8_t retry = 0; retry < Config::MaxRetry; retry++)
-    {
-        Serial.printf("LoRa TX try %u: %s\n", retry + 1, payload.c_str());
-        LoRa.beginPacket();
-        LoRa.print(payload);
-        LoRa.endPacket(true);
-        delay(250);
-        LoRa.receive();
+    Serial.print("LoRa TX: ");
+    Serial.println(payload);
 
-        if (waitForAck(telemetry.packetId))
-        {
-            return true;
-        }
-        delay(500);
-    }
-    return false;
+    LoRa.beginPacket();
+    LoRa.print(payload);
+    LoRa.endPacket(true);
+    delay(250);
+    LoRa.receive();
+
+    return waitForAck(telemetry.packetId);
 }
 
 static void enterSleepSeconds(uint32_t sleepSeconds)
@@ -479,10 +469,10 @@ void setup()
                   telemetry.soilMoistureVol, telemetry.soilStatus.c_str(), soil.errorFlag);
     Serial.printf("Battery: %.2f V\n", telemetry.batteryV);
 
-    const bool delivered = sendTelemetryWithRetry(telemetry);
+    const bool delivered = sendTelemetry(telemetry);
     if (!delivered)
     {
-        Serial.println("No ACK after MAX_RETRY");
+        Serial.println("No ACK; TX failed");
     }
 
     enterSleepSeconds(computeAdaptiveSleepSeconds(telemetry));

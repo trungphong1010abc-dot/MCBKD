@@ -46,7 +46,7 @@ Trong `project_config.h`:
 | Sensor power | `SensorPowerPin = GPIO32` |
 | Pump hardware | `EnablePumpHardware = false`, không đấu nối bơm thật |
 | LoRa | `433E6`, SF7, BW125kHz, CR4/5, 17dBm |
-| ACK/retry | `AckTimeoutMs = 2500`, `MaxRetry = 3` |
+| ACK | `AckTimeoutMs = 2500`; node gửi telemetry một lần, không retry nếu mất ACK |
 | Sleep | Mặc định `30` phút, adaptive `5..90` phút |
 | Gateway cloud | WiFi + ThingsBoard HTTP telemetry |
 
@@ -68,12 +68,12 @@ Trình tự chạy trong `setup()`:
    - duty cycle mode.
 5. Khởi tạo DHT22 ở `GPIO27`.
 6. Khởi tạo cảm biến đất ở `GPIO34` với calibration dry/wet.
-7. Khởi tạo LoRa. Node retry khởi tạo tối đa 3 lần.
+7. Khởi tạo LoRa một lần. Nếu khởi tạo lỗi thì node ngủ 5 phút rồi chu kỳ sau thử lại.
 8. Đọc DHT22.
 9. Đọc độ ẩm đất.
 10. Đo điện áp pin qua mạch chia áp ở `GPIO35`.
 11. Đóng gói telemetry.
-12. Gửi telemetry qua LoRa, chờ ACK từ gateway, retry tối đa 3 lần nếu chưa nhận ACK hợp lệ.
+12. Gửi telemetry qua LoRa, chờ ACK từ gateway; hiện cấu hình không retry thêm nếu chưa nhận ACK hợp lệ.
 13. Nếu ACK có command thì thực thi command.
 14. Tính thời gian sleep theo adaptive duty cycle.
 15. Tắt LoRa, kéo `SensorPowerPin` LOW, vào deep sleep.
@@ -227,9 +227,9 @@ Command code hiện có:
 | `START_OTA` | Bắt phiên OTA mô phỏng qua LoRa |
 | `START_PUMP` | Lệnh legacy trong code; không dùng cho phần cứng hiện tại |
 
-## 9. Gửi LoRa và retry
+## 9. Gửi LoRa và ACK
 
-Node gửi telemetry bằng `sendTelemetryWithRetry()`:
+Node gửi telemetry bằng `sendTelemetry()`:
 
 1. Encode telemetry thành chuỗi có CRC.
 2. Gửi qua LoRa.
@@ -240,7 +240,7 @@ Node gửi telemetry bằng `sendTelemetryWithRetry()`:
    - `NODE` đúng `NodeId`,
    - `PID` trùng packet vừa gửi.
 6. Nếu ACK hợp lệ và `OK=1`, xem như gửi thành công.
-7. Nếu fail, retry tối đa `MaxRetry = 3`.
+7. Nếu fail, node không gửi lại packet đó; chu kỳ hiện tại kết thúc và node ngủ đến lần đo sau.
 
 Gateway khi nhận packet:
 
@@ -407,7 +407,7 @@ LoRa init OK
 DHT: T=... C H=... %RH ERR=0
 SOIL: ADC=... H=... %Vol status=... ERR=0
 Battery: ... V
-LoRa TX try 1: TYPE=DATA,...
+LoRa TX: TYPE=DATA,...
 ACK received: TYPE=ACK,...
 Sleep duration: ... min
 ```
