@@ -17,7 +17,7 @@ void setup()
     loraReady = initLoRa();
     if (!loraReady)
     {
-        Serial.println("LoRa init failed; WiFi/web will continue and LoRa will retry");
+        Serial.println("LoRa init failed; WiFi/web will continue");
     }
     else
     {

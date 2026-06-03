@@ -167,17 +167,25 @@ static void sendOtaStatus(uint32_t otaId, uint16_t chunkIndex, bool ok, const St
     LoRa.beginPacket();
     LoRa.print(payload);
     LoRa.endPacket();
-    delay(100);
     LoRa.receive();
+    delay(100);
     Serial.print("OTA STATUS TX: ");
     Serial.println(payload);
 }
 
-static bool waitForOtaChunk(uint32_t otaId, uint16_t expectedIndex, OtaChunkPacket &chunk)
+static bool waitForOtaChunk(uint32_t otaId, uint16_t expectedIndex, OtaChunkPacket &chunk,
+                            bool advertiseReady)
 {
     const uint32_t start = millis();
-    while (millis() - start < 6000)
+    uint32_t lastReadyMs = 0;
+    while (millis() - start < 12000)
     {
+        if (advertiseReady && millis() - lastReadyMs >= 1200)
+        {
+            lastReadyMs = millis();
+            sendOtaStatus(otaId, 0, true, "OTA_READY");
+        }
+
         const int packetSize = LoRa.parsePacket();
         if (packetSize <= 0)
         {
@@ -216,7 +224,7 @@ static void runSimulatedLoraOta(uint32_t otaId)
     }
 
     Serial.printf("START_OTA session ota_id=%lu\n", otaId);
-    sendOtaStatus(otaId, 0, true, "OTA_READY");
+    Serial.println("OTA simulation only; firmware flash is not modified");
 
     uint16_t expectedTotal = 0;
     uint16_t receivedChunks = 0;
@@ -225,7 +233,8 @@ static void runSimulatedLoraOta(uint32_t otaId)
     while (true)
     {
         OtaChunkPacket chunk;
-        if (!waitForOtaChunk(otaId, receivedChunks + 1, chunk))
+        const bool advertiseReady = receivedChunks == 0;
+        if (!waitForOtaChunk(otaId, receivedChunks + 1, chunk, advertiseReady))
         {
             sendOtaStatus(otaId, receivedChunks + 1, false, "OTA_FAILED_TIMEOUT");
             return;
@@ -252,7 +261,12 @@ static void runSimulatedLoraOta(uint32_t otaId)
         if (receivedChunks >= expectedTotal)
         {
             Serial.printf("OTA simulated firmware CRC=%04X chunks=%u\n", firmwareCrc, receivedChunks);
-            sendOtaStatus(otaId, receivedChunks, true, "OTA_SUCCESS");
+            delay(300);
+            for (uint8_t i = 0; i < 3; i++)
+            {
+                sendOtaStatus(otaId, receivedChunks, true, "OTA_SUCCESS");
+                delay(300);
+            }
             return;
         }
     }
@@ -436,8 +450,11 @@ void setup()
 
     if (!initLoRa())
     {
-        Serial.println("LoRa init failed");
-        enterSleep(5);
+        const uint32_t failureSleepMinutes = runtimeConfig.sleepMinutes > 0
+                                                 ? runtimeConfig.sleepMinutes
+                                                 : Config::DefaultSleepMinutes;
+        Serial.printf("LoRa init failed; sleeping %lu min\n", failureSleepMinutes);
+        enterSleep(failureSleepMinutes);
         return;
     }
     Serial.println("LoRa init OK");

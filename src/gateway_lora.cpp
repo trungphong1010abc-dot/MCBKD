@@ -14,36 +14,34 @@ static void sendAckFor(const TelemetryPacket &packet);
 
 bool initLoRa()
 {
-    for (uint8_t attempt = 1; attempt <= 3; attempt++)
+    LoRa.end();
+    SPI.end();
+    delay(50);
+
+    pinMode(Config::LoraSs, OUTPUT);
+    digitalWrite(Config::LoraSs, HIGH);
+    pinMode(Config::LoraRst, OUTPUT);
+    digitalWrite(Config::LoraRst, LOW);
+    delay(50);
+    digitalWrite(Config::LoraRst, HIGH);
+    delay(200);
+
+    SPI.begin(Config::LoraSck, Config::LoraMiso, Config::LoraMosi, Config::LoraSs);
+    LoRa.setPins(Config::LoraSs, Config::LoraRst, Config::LoraDio0);
+    if (!LoRa.begin(Config::LoraFrequency))
     {
         LoRa.end();
         SPI.end();
-        delay(50);
-
-        pinMode(Config::LoraSs, OUTPUT);
-        digitalWrite(Config::LoraSs, HIGH);
-        pinMode(Config::LoraRst, OUTPUT);
-        digitalWrite(Config::LoraRst, LOW);
-        delay(50);
-        digitalWrite(Config::LoraRst, HIGH);
-        delay(200);
-
-        SPI.begin(Config::LoraSck, Config::LoraMiso, Config::LoraMosi, Config::LoraSs);
-        LoRa.setPins(Config::LoraSs, Config::LoraRst, Config::LoraDio0);
-        if (LoRa.begin(Config::LoraFrequency))
-        {
-            LoRa.setSpreadingFactor(Config::LoraSpreadingFactor);
-            LoRa.setSignalBandwidth(Config::LoraSignalBandwidth);
-            LoRa.setCodingRate4(Config::LoraCodingRate);
-            LoRa.setTxPower(Config::LoraTxPowerDbm);
-            LoRa.enableCrc();
-            LoRa.receive();
-            return true;
-        }
-
-        Serial.printf("LoRa init retry %u failed\n", attempt);
+        return false;
     }
-    return false;
+
+    LoRa.setSpreadingFactor(Config::LoraSpreadingFactor);
+    LoRa.setSignalBandwidth(Config::LoraSignalBandwidth);
+    LoRa.setCodingRate4(Config::LoraCodingRate);
+    LoRa.setTxPower(Config::LoraTxPowerDbm);
+    LoRa.enableCrc();
+    LoRa.receive();
+    return true;
 }
 
 static bool waitForOtaStatus(uint8_t nodeId, uint32_t otaId, uint16_t chunkIndex,
@@ -85,7 +83,8 @@ static bool waitForOtaStatus(uint8_t nodeId, uint32_t otaId, uint16_t chunkIndex
         }
         if (status.chunkIndex != chunkIndex && expectedStatus != "OTA_SUCCESS")
         {
-            Serial.println("OTA status ignored: chunk mismatch");
+            Serial.printf("OTA status ignored: chunk mismatch idx=%u expected=%u status=%s\n",
+                          status.chunkIndex, chunkIndex, status.status.c_str());
             continue;
         }
         if (expectedStatus.length() > 0 && status.status != expectedStatus)
@@ -101,24 +100,33 @@ static bool waitForOtaStatus(uint8_t nodeId, uint32_t otaId, uint16_t chunkIndex
 static bool sendOtaChunk(uint8_t nodeId, uint32_t otaId, uint16_t index,
                          uint16_t total, const String &data)
 {
-    OtaChunkPacket chunk;
-    chunk.nodeId = nodeId;
-    chunk.otaId = otaId;
-    chunk.chunkIndex = index;
-    chunk.totalChunks = total;
-    chunk.payloadData = data;
-    chunk.dataCrc = crc16Ccitt(data);
+    constexpr uint8_t maxAttempts = 3;
+    for (uint8_t attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        OtaChunkPacket chunk;
+        chunk.nodeId = nodeId;
+        chunk.otaId = otaId;
+        chunk.chunkIndex = index;
+        chunk.totalChunks = total;
+        chunk.payloadData = data;
+        chunk.dataCrc = crc16Ccitt(data);
 
-    const String payload = encodeOtaChunk(chunk);
-    Serial.printf("OTA CHUNK TX idx=%u: %s\n", index, payload.c_str());
-    LoRa.beginPacket();
-    LoRa.print(payload);
-    LoRa.endPacket();
-    delay(150);
-    LoRa.receive();
+        const String payload = encodeOtaChunk(chunk);
+        Serial.printf("OTA CHUNK TX idx=%u try=%u: %s\n", index, attempt, payload.c_str());
+        LoRa.beginPacket();
+        LoRa.print(payload);
+        LoRa.endPacket();
+        LoRa.receive();
+        delay(150);
 
-    OtaStatusPacket status;
-    return waitForOtaStatus(nodeId, otaId, index, "ACK", status);
+        OtaStatusPacket status;
+        if (waitForOtaStatus(nodeId, otaId, index, "ACK", status))
+        {
+            return true;
+        }
+        Serial.printf("OTA chunk retry idx=%u next_try=%u\n", index, attempt + 1);
+    }
+    return false;
 }
 
 static void runSimulatedLoraOtaTransfer(uint8_t nodeId, uint32_t otaId)
@@ -143,6 +151,7 @@ static void runSimulatedLoraOtaTransfer(uint8_t nodeId, uint32_t otaId)
 
     Serial.printf("OTA session start node=%u ota_id=%lu\n", nodeId, otaId);
     LoRa.receive();
+    delay(500);
 
     constexpr uint16_t totalChunks = sizeof(chunks) / sizeof(chunks[0]);
     for (uint16_t i = 0; i < totalChunks; i++)
@@ -220,8 +229,8 @@ static void sendAckFor(const TelemetryPacket &packet)
     LoRa.beginPacket();
     LoRa.print(payload);
     LoRa.endPacket();
-    delay(100);
     LoRa.receive();
+    delay(100);
     Serial.print("ACK TX: ");
     Serial.println(payload);
 
@@ -239,13 +248,6 @@ void processLoRa()
 {
     if (!loraReady)
     {
-        if (millis() - lastLoraRetryMs >= 10000)
-        {
-            lastLoraRetryMs = millis();
-            Serial.println("LoRa not ready; retrying init");
-            loraReady = initLoRa();
-            Serial.println(loraReady ? "LoRa init OK" : "LoRa init failed; WiFi/web still running");
-        }
         return;
     }
 
