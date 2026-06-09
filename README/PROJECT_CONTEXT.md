@@ -1,30 +1,32 @@
 # Project Context - EE4552 Wireless Sensor Network
 
-Tài liệu này giải thích ý tưởng phần mềm và thuật toán theo code hiện tại trong thư mục `src/`.
-Đọc cùng với `README/HARDWARE_WIRING_GUIDE.md` là có thể nắm được cả phần cứng, phần mềm và luồng hoạt động của hệ thống.
+Tài liệu này mô tả phần mềm theo code hiện tại trong `src/`. Đọc cùng `README/HARDWARE_WIRING_GUIDE.md` để nắm cả phần cứng và luồng hoạt động.
 
-## 1. Mục tiêu dự án
+## 1. Mục Tiêu Dự Án
 
-Hệ thống là mạng cảm biến không dây để giám sát môi trường đất/không khí trên cánh đồng.
+Hệ thống là mạng cảm biến không dây dùng ESP32 và LoRa để giám sát môi trường đất/không khí.
 
-Thành phần chính:
+- `node`: đọc DHT22, cảm biến độ ẩm đất điện dung, điện áp pin; gửi telemetry qua LoRa; nhận ACK/command; lưu cấu hình runtime vào NVS; sau đó deep sleep.
+- `gateway`: nhận telemetry LoRa, lưu history RAM, phục vụ dashboard web, xuất CSV, gửi telemetry lên ThingsBoard, queue command cho node và hỗ trợ gateway self-OTA qua WiFi.
 
-- `Node`: đặt ngoài đồng, đọc cảm biến DHT22, cảm biến độ ẩm đất điện dung, đo điện áp pin, gửi dữ liệu bằng LoRa, sau đó deep sleep để tiết kiệm pin.
-- `Gateway`: đặt nơi có WiFi, nhận LoRa từ node, lưu lịch sử tạm thời, hiển thị dashboard web, xuất CSV, gửi telemetry lên ThingsBoard và gửi ACK/command ngược về node.
+Hiện tại bơm thật không được bật tự động vì `Config::EnablePumpHardware = false`. Code vẫn có `PumpPin = GPIO25` và command `START_PUMP` cho mục đích legacy/test, nhưng tài liệu phần cứng không khuyến nghị đấu bơm trực tiếp.
 
-Hiện tại không điều khiển bơm thật. Code có tính `PumpTime` như một giá trị mô phỏng/gợi ý tưới tiêu dựa trên độ ẩm đất, nhiệt độ và độ ẩm không khí. Vì `Config::EnablePumpHardware = false`, gateway không tự động gửi lệnh bật bơm theo `PumpTime`. Một số tên cũ trong code vẫn có chữ `Pump`, nhưng trong thiết kế phần cứng hiện tại không đấu nối bơm.
-
-## 2. Cấu trúc code
+## 2. Cấu Trúc Code
 
 | File | Vai trò |
 | --- | --- |
-| `src/project_config.h` | Toàn bộ cấu hình chân GPIO, LoRa, WiFi, ThingsBoard, sleep, calibration |
-| `src/node_main.cpp` | Firmware cho node: đọc cảm biến, đo pin, gửi LoRa, nhận ACK/command, deep sleep |
-| `src/gateway_main.cpp` | Firmware cho gateway: nhận LoRa, dashboard web, CSV, ThingsBoard, command, OTA mô phỏng |
-| `src/dht22_sensor.cpp/.h` | Driver DHT22 tự viết bằng timing 1-wire |
-| `src/soil_moisture.cpp/.h` | Đọc ADC cảm biến đất, median filter, tính `%Vol`, phân loại trạng thái |
-| `src/packet_protocol.cpp/.h` | Định dạng packet LoRa, CRC16, encode/decode telemetry, ACK, OTA chunk/status |
-| `platformio.ini` | Cấu hình build riêng `env:node` và `env:gateway` |
+| `src/project_config.h` | Cấu hình GPIO, LoRa, WiFi, ThingsBoard, sleep, calibration, OTA version |
+| `src/node_main.cpp` | Firmware node: cảm biến, pin, LoRa telemetry, ACK/command, NVS, deep sleep, OTA mô phỏng |
+| `src/gateway_main.cpp` | Entry point gateway |
+| `src/gateway_state.cpp/.h` | Biến trạng thái gateway, history, pending command, OTA state |
+| `src/gateway_logic.cpp/.h` | Parse command, tính alert, pump time, lưu telemetry, queue command |
+| `src/gateway_lora.cpp/.h` | Init/process LoRa, ACK, chống packet trùng, OTA mô phỏng |
+| `src/gateway_cloud.cpp/.h` | Upload ThingsBoard qua HTTP |
+| `src/gateway_web.cpp/.h` | WiFi, dashboard HTTP, CSV, command endpoint, gateway self-OTA |
+| `src/dht22_sensor.cpp/.h` | Driver DHT22 tự viết bằng timing |
+| `src/soil_moisture.cpp/.h` | Đọc ADC đất, median filter, tính `%Vol`, phân loại trạng thái |
+| `src/packet_protocol.cpp/.h` | Packet text, command enum, CRC16-CCITT, encode/decode telemetry/ACK/OTA |
+| `platformio.ini` | Build env `node` và `gateway`; default env hiện là `gateway` |
 
 Build:
 
@@ -33,118 +35,83 @@ pio run -e node
 pio run -e gateway
 ```
 
-## 3. Cấu hình chính
+## 3. Cấu Hình Chính
 
-Trong `project_config.h`:
-
-| Nhóm | Giá trị quan trọng |
+| Nhóm | Giá trị hiện tại |
 | --- | --- |
-| Node/Gateway ID | `NodeId = 1`, `GatewayId = 1` |
-| DHT22 | `DhtPin = GPIO27` |
-| Soil ADC | `SoilAdcPin = GPIO34` |
-| Battery ADC | `BatteryAdcPin = GPIO35`, `BatteryDividerRatio = 3.2` |
-| Sensor power | `SensorPowerPin = GPIO32` |
-| Pump hardware | `EnablePumpHardware = false`, không đấu nối bơm thật |
-| LoRa | `433E6`, SF7, BW125kHz, CR4/5, 17dBm |
-| ACK | `AckTimeoutMs = 2500`; node gửi telemetry một lần, không retry nếu mất ACK |
-| Sleep | Mặc định `30` phút, adaptive `5..90` phút |
-| Gateway cloud | WiFi + ThingsBoard HTTP telemetry |
+| Serial | `115200` |
+| ID | `NodeId = 1`, `GatewayId = 1` |
+| DHT22 | `GPIO27`, offset nhiệt/ẩm đều `0` |
+| Soil ADC | `GPIO34`, dry `3400`, wet `1200`, valid ADC `100..4090` |
+| Battery ADC | `GPIO35`, `BatteryDividerRatio = 3.2` |
+| Sensor power | `GPIO32`, HIGH khi node thức, LOW trước sleep |
+| Pump | `GPIO25`, active HIGH, max `15s`, `EnablePumpHardware=false` |
+| LoRa | `433E6`, SF7, BW125kHz, CR4/5, TX power 17dBm, CRC bật |
+| ACK timeout | `2500ms` |
+| Deep sleep | Bật; default `30` phút; adaptive `5..90` phút |
+| Gateway HTTP | Dashboard port `80`, debug ping server port `8080` |
+| ThingsBoard | HTTP port `80`, upload bật nếu WiFi kết nối |
+| Gateway firmware version | `GW_OTA_TEST_1` |
 
-## 4. Luồng hoạt động của Node
+## 4. Luồng Hoạt Động Của Node
 
-Firmware node nằm trong `node_main.cpp`.
+Node chạy chủ yếu trong `setup()` vì deep sleep được bật.
 
-Trình tự chạy trong `setup()`:
+1. Mở Serial.
+2. Kéo `SensorPowerPin = GPIO32` lên HIGH.
+3. Cấu hình `PumpPin = GPIO25` và tắt bơm/output.
+4. Đọc runtime config từ Preferences namespace `node_cfg`.
+5. Khởi tạo DHT22 tại `GPIO27`.
+6. Khởi tạo soil sensor tại `GPIO34`.
+7. Reset/init LoRa. Nếu fail, node ngủ theo `runtimeConfig.sleepMinutes` hoặc default 30 phút.
+8. Đọc DHT22, đất và pin.
+9. Tạo `TelemetryPacket`, kèm cả dữ liệu cảm biến và config hiện tại của node.
+10. Gửi packet `TYPE=DATA` qua LoRa, chờ ACK tối đa `2500ms`.
+11. Nếu ACK hợp lệ, `OK=1` và có command, node thực thi command rồi lưu config nếu cần.
+12. Tính thời gian sleep fixed/adaptive.
+13. Cho LoRa sleep/end, dừng SPI, kéo `GPIO32` LOW và vào deep sleep.
 
-1. Mở Serial `115200`.
-2. Bật `SensorPowerPin = GPIO32` lên HIGH.
-3. Đưa chân legacy `GPIO25` về OFF; phần cứng hiện tại không đấu nối bơm vào chân này.
-4. Đọc runtime config từ ESP32 Preferences:
-   - ngưỡng độ ẩm đất,
-   - sleep duration,
-   - filter mode,
-   - pump seconds mô phỏng,
-   - control mode,
-   - duty cycle mode.
-5. Khởi tạo DHT22 ở `GPIO27`.
-6. Khởi tạo cảm biến đất ở `GPIO34` với calibration dry/wet.
-7. Khởi tạo LoRa một lần. Nếu khởi tạo lỗi thì node ngủ 5 phút rồi chu kỳ sau thử lại.
-8. Đọc DHT22.
-9. Đọc độ ẩm đất.
-10. Đo điện áp pin qua mạch chia áp ở `GPIO35`.
-11. Đóng gói telemetry.
-12. Gửi telemetry qua LoRa, chờ ACK từ gateway; hiện cấu hình không retry thêm nếu chưa nhận ACK hợp lệ.
-13. Nếu ACK có command thì thực thi command.
-14. Tính thời gian sleep theo adaptive duty cycle.
-15. Tắt LoRa, kéo `SensorPowerPin` LOW, vào deep sleep.
+Nếu `Config::EnableDeepSleep=false`, `loop()` sẽ delay theo `rtcSleepMinutes` rồi restart.
 
-Vì `loop()` gần như không dùng khi deep sleep bật, mỗi chu kỳ node sẽ thức dậy, chạy `setup()`, gửi một lần, rồi ngủ tiếp.
+## 5. Driver DHT22
 
-## 5. Đọc DHT22
+Driver trong `dht22_sensor.cpp`:
 
-Driver DHT22 nằm trong `dht22_sensor.cpp`.
-
-Thuật toán:
-
-1. ESP32 kéo chân DATA LOW khoảng `20 ms` để gửi start signal.
-2. Chuyển DATA về `INPUT_PULLUP`.
-3. Đợi DHT22 phản hồi bằng xung LOW/HIGH.
-4. Đọc 40 bit thành 5 byte:
-   - byte 0-1: độ ẩm,
-   - byte 2-3: nhiệt độ,
-   - byte 4: checksum.
-5. Kiểm tra checksum:
-
-```text
-checksum = (B0 + B1 + B2 + B3) & 0xFF
-checksum phải bằng B4
-```
-
-1. Tính giá trị:
+1. ESP32 kéo DATA LOW khoảng `20ms`, nhả HIGH `40us`, sau đó chuyển `INPUT_PULLUP`.
+2. Đợi response LOW/HIGH từ DHT22.
+3. Đọc 40 bit thành 5 byte.
+4. Check checksum: `(B0 + B1 + B2 + B3) & 0xFF == B4`.
+5. Tính:
 
 ```text
 H_air = rawHumidity / 10.0 + HumidityOffsetRh
 T_air = rawTemperature / 10.0 + TempOffsetC
 ```
 
-1. Validate:
-   - `-10 <= T_air <= 50 C`
-   - `0 <= H_air <= 100 %RH`
-   - biến thiên liên tiếp không quá `2 C` và `5 %RH`
-2. Nếu hợp lệ, đưa vào bộ đệm trung bình trượt 5 mẫu và làm tròn 0.1.
-3. Nếu lỗi timing, checksum hoặc validate, trả `errorFlag = 1`.
+6. Validate `-10..50 C`, `0..100 %RH`, và loại mẫu nhảy quá `2 C` hoặc `5 %RH` so với mẫu trước.
+7. Lưu vào buffer trung bình trượt 5 mẫu, trả giá trị làm tròn 0.1.
+8. Nếu lỗi timing/checksum/validate, trả `errorFlag = 1`.
 
-4. Cấu hình ADC 12 bit, attenuation `ADC_11db`.
-5. Đọc nhiều mẫu ADC từ `GPIO34`.
-6. Loại bỏ 3 mẫu đầu để cảm biến ổn định.
-7. Nếu ADC nằm ngoài khoảng hợp lệ `100..4090`, tăng bộ đếm lỗi và retry sau `350 ms`.
-8. Nếu lỗi ADC quá ngưỡng, set `errorFlag = 1`.
-9. Với mẫu hợp lệ, lọc median để lấy `ADC_filtered`.
+## 6. Driver Độ Ẩm Đất
 
-## 6. Đọc độ ẩm đất
+Driver trong `soil_moisture.cpp`:
 
-Driver cảm biến đất nằm trong `soil_moisture.cpp`.
-
-Thuật toán:
-
-1. Cấu hình ADC 12 bit, attenuation `ADC_11db`.
-2. Đọc nhiều mẫu ADC từ `GPIO34`.
-3. Loại bỏ 3 mẫu đầu để cảm biến ổn định.
-4. Nếu ADC nằm ngoài khoảng hợp lệ `100..4090`, tăng bộ đếm lỗi và retry sau `350 ms`.
-5. Nếu lỗi ADC quá ngưỡng, set `errorFlag = 1`.
-6. Với mẫu hợp lệ, lọc median để lấy `ADC_filtered`.
-7. Quy đổi sang độ ẩm đất:
+1. ADC 12 bit, attenuation `ADC_11db`.
+2. Đọc 11 mẫu từ `GPIO34`.
+3. Bỏ 3 mẫu đầu.
+4. Nếu ADC nằm ngoài `100..4090`, retry sau `350ms`; lỗi 3 lần thì `errorFlag = 1`.
+5. Lọc median các mẫu còn lại.
+6. Quy đổi:
 
 ```text
-H_soil = (ADC_dry - ADC_filtered) * 60 / (ADC_dry - ADC_wet)
-ADC_dry = 3400
-ADC_wet = 1200
+H_soil = (3400 - ADC_filtered) * 60 / (3400 - 1200)
 ```
 
-1. Giới hạn `H_soil` trong `0..60 %Vol`, làm tròn 0.1.
-2. Phân loại:
+7. Giới hạn `0..60 %Vol`, làm tròn 0.1.
 
-| H_soil | Soil status |
+Phân loại:
+
+| H_soil | Trạng thái |
 | ---: | --- |
 | `> 42` | `OVER_MOISTURE` |
 | `> 33..42` | `NORMAL` |
@@ -152,121 +119,112 @@ ADC_wet = 1200
 | `> 15..24` | `NEED_WATERING` |
 | `<= 15` | `URGENT_WATERING` |
 
-## 7. Đo điện áp pin
+## 7. Đo Điện Áp Pin
 
-![Mạch chia áp](Voltage_divider_circuit.png)
+Node đọc pin trong `readBatteryVoltage()`:
 
-Node đo pin bằng `GPIO35` qua mạch chia áp `220k/100k`.
-
-Thuật toán trong `readBatteryVoltage()`:
-
-1. Cấu hình ADC 12 bit, attenuation `ADC_11db`.
-2. Đọc 16 mẫu bằng `analogReadMilliVolts()`.
-3. Lấy trung bình điện áp tại GPIO35.
-4. Nhân với `BatteryDividerRatio = 3.2`:
+1. ADC 12 bit, attenuation `ADC_11db` tại `GPIO35`.
+2. Đọc 16 mẫu `analogReadMilliVolts()`.
+3. Lấy trung bình điện áp tại chân ADC.
+4. Nhân `BatteryDividerRatio = 3.2`.
 
 ```text
 V_bat = V_gpio35 * 3.2
 ```
 
-Mức pin ảnh hưởng đến adaptive sleep:
+Pin ảnh hưởng adaptive sleep:
 
-- `V_bat < 3.3V`: sleep `90` phút.
-- `V_bat < 3.5V`: sleep `60` phút.
+| Điều kiện | Sleep |
+| --- | ---: |
+| `V_bat < 3.3V` | 90 phút |
+| `V_bat < 3.5V` | 60 phút |
 
-## 8. Packet LoRa và CRC
+## 8. Packet LoRa Và CRC
 
-Protocol nằm trong `packet_protocol.cpp`.
-Packet là chuỗi text dạng `KEY=VALUE`, có CRC16-CCITT ở cuối.
+Protocol dùng chuỗi text `KEY=VALUE` và CRC16-CCITT ở cuối. Hàm encode chuyển payload thành uppercase trước khi tính và gắn CRC.
 
-### 8.1. Telemetry Node -> Gateway
-
-Dạng packet:
+Telemetry node gửi gateway:
 
 ```text
-TYPE=DATA,NODE=1,PID=1,T=30.1,HA=70.2,HS=25,VB=4.05,ADC=2480,SOIL=LIGHT_DRY,ERR=0,CRC=....
+TYPE=DATA,NODE=1,PID=1,T=30.1,HA=70.2,HS=25,VB=4.05,ADC=2480,SOIL=LIGHT_DRY,ERR=0,CSLEEP=30,CTH=20,CFILTER=0,CPUMP=5,CMODE=1,CDUTY=1,CRC=....
 ```
-
-Trường dữ liệu:
 
 | Trường | Ý nghĩa |
 | --- | --- |
-| `TYPE=DATA` | Gói telemetry |
+| `TYPE=DATA` | Telemetry |
 | `NODE` | ID node |
-| `PID` | Packet ID, tăng theo mỗi lần gửi |
-| `T` | Nhiệt độ không khí, độ C |
-| `HA` | Độ ẩm không khí, `%RH` |
-| `HS` | Độ ẩm đất, `%Vol` |
+| `PID` | Packet ID, lưu trong RTC và tăng mỗi chu kỳ |
+| `T` | Nhiệt độ không khí |
+| `HA` | Độ ẩm không khí |
+| `HS` | Độ ẩm đất `%Vol` |
 | `VB` | Điện áp pin |
-| `ADC` | Giá trị ADC đất đã lọc |
-| `SOIL` | Trạng thái đất |
-| `ERR` | Có lỗi cảm biến hay không |
-| `CRC` | CRC16 của chuỗi trước trường CRC |
+| `ADC` | ADC đất sau lọc |
+| `SOIL` | Trạng thái đất do node phân loại |
+| `ERR` | Lỗi cảm biến |
+| `CSLEEP` | Sleep config hiện tại của node |
+| `CTH` | Soil threshold config |
+| `CFILTER` | Filter mode config: `0=AVERAGE`, `1=MEDIAN` |
+| `CPUMP` | Pump seconds config |
+| `CMODE` | Control mode config: `0=MANUAL`, `1=AUTO` |
+| `CDUTY` | Duty mode config: `0=FIXED`, `1=ADAPTIVE` |
+| `CRC` | CRC16 của payload trước trường CRC |
 
-### 8.2. ACK Gateway -> Node
-
-Dạng packet:
+ACK gateway gửi node:
 
 ```text
 TYPE=ACK,NODE=1,PID=1,OK=1,CMD=NONE,PARAM=0,STATUS=OK,CRC=....
 ```
 
-ACK vừa xác nhận gateway đã nhận dữ liệu, vừa có thể kèm command cho node.
-
-Command code hiện có:
+Command hiện có:
 
 | Command | Ý nghĩa |
 | --- | --- |
-| `SET_SLEEP_DURATION` | Đổi thời gian sleep cố định, 5..90 phút |
-| `SET_THRESHOLD` | Đổi ngưỡng độ ẩm đất trong runtime config |
-| `SET_FILTER_MODE` | Chọn `AVERAGE`/`MEDIAN` theo config, hiện driver đất vẫn dùng median |
-| `SET_PUMP_TIME` | Đổi thời gian tưới gợi ý/mô phỏng |
-| `SET_CONTROL_MODE` | Đổi `MANUAL`/`AUTO` trong config |
-| `SET_DUTY_CYCLE` | Chọn `FIXED`/`ADAPTIVE` |
-| `SLEEP_NOW` | Lệnh ngủ ngay, hiện tại chỉ log |
-| `START_OTA` | Bắt phiên OTA mô phỏng qua LoRa |
-| `START_PUMP` | Lệnh legacy trong code; không dùng cho phần cứng hiện tại |
+| `SET_SLEEP_DURATION` | Đổi sleep fixed, nhận `5..90` phút; có hiệu lực khi duty mode là `FIXED` |
+| `SET_THRESHOLD` | Lưu ngưỡng độ ẩm đất vào config và telemetry; phân loại đất hiện vẫn dùng ngưỡng cố định trong code |
+| `SET_FILTER_MODE` | Lưu `AVERAGE` hoặc `MEDIAN`; driver soil hiện vẫn lọc median cố định |
+| `SET_PUMP_TIME` | Lưu pump seconds config, tối đa 15s; `computePumpTime()` hiện vẫn tính theo thuật toán riêng |
+| `SET_CONTROL_MODE` | Lưu `MANUAL` hoặc `AUTO`; chưa đổi luồng điều khiển chính |
+| `SET_DUTY_CYCLE` | `FIXED` hoặc `ADAPTIVE` |
+| `SLEEP_NOW` | Hiện chỉ log command |
+| `START_PUMP` | Kéo `GPIO25` theo `PARAM` giây; legacy/test |
+| `START_OTA` | Bắt đầu OTA mô phỏng qua LoRa |
+| `RESEND_CHUNK` | Có trong enum/protocol, chưa có luồng xử lý chính |
 
-## 9. Gửi LoRa và ACK
+## 9. Gateway LoRa Và ACK
 
-Node gửi telemetry bằng `sendTelemetry()`:
+Gateway `processLoRa()`:
 
-1. Encode telemetry thành chuỗi có CRC.
-2. Gửi qua LoRa.
-3. Chuyển LoRa về receive mode.
-4. Chờ ACK trong `2500 ms`.
-5. Decode ACK và kiểm tra:
-   - CRC đúng,
-   - `NODE` đúng `NodeId`,
-   - `PID` trùng packet vừa gửi.
-6. Nếu ACK hợp lệ và `OK=1`, xem như gửi thành công.
-7. Nếu fail, node không gửi lại packet đó; chu kỳ hiện tại kết thúc và node ngủ đến lần đo sau.
+1. Nếu nhận `TYPE=OTA_STATUS`, xử lý trạng thái OTA mô phỏng.
+2. Nếu nhận `TYPE=DATA`, decode và check CRC.
+3. Nếu `NODE/PID` trùng packet gần nhất, bỏ lưu history nhưng vẫn gửi lại ACK.
+4. Lưu telemetry vào vòng đệm RAM 64 mẫu.
+5. In log gồm RSSI, SNR, alert và `PumpTime`.
+6. Upload ThingsBoard nếu WiFi/cloud sẵn sàng.
+7. Gửi ACK về node.
 
-Gateway khi nhận packet:
+ACK có `OK=0` nếu `packet.errorFlag != 0`, status `SENSOR_ERROR`. Node bỏ qua command khi ACK có `OK=0`. Pending command được gửi kèm ACK trong tối đa 3 lần, riêng `START_OTA` được lặp tối đa 10 lần để tăng xác suất node nhận được.
 
-1. Decode telemetry và check CRC.
-2. Bỏ qua packet trùng `PID` của cùng node, nhưng vẫn gửi lại ACK để node không retry mãi.
-3. Lưu packet vào history vòng 64 mẫu.
-4. In log Serial.
-5. Upload ThingsBoard nếu WiFi/cloud đang bật.
-6. Gửi ACK về node.
+## 10. Gateway Web, CSV Và ThingsBoard
 
-## 10. Gateway dashboard, CSV và ThingsBoard
-
-Gateway dùng `WebServer` port 80.
+Gateway chạy `WebServer` port 80 trong task riêng pinned core 0. Ngoài ra có debug ping server đơn giản port 8080.
 
 Endpoint:
 
 | URL | Chức năng |
 | --- | --- |
-| `/` | Dashboard HTML đơn giản hiển thị lịch sử telemetry |
-| `/export.csv` | Xuất history dạng CSV |
-| `/command?node=1&cmd=SET_SLEEP_DURATION&param=10` | Xếp command cho node |
-| `/self_ota?url=http://server/firmware.bin&md5=optional` | Gateway self-OTA qua WiFi |
+| `/` | Dashboard HTML, hiển thị history telemetry và config node |
+| `/ping` | Trả `pong` |
+| `/export.csv` | Xuất history CSV |
+| `/command?node=1&cmd=SET_SLEEP_DURATION&param=10` | Queue command cho node |
+| `/self_ota?url=http://server/firmware.bin&md5=optional` | Gateway self-OTA qua WiFi/HTTP |
 
-History lưu trong RAM, tối đa 64 bản ghi mới nhất. Mất nguồn gateway sẽ mất history này.
+CSV hiện có các cột:
 
-Telemetry gửi lên ThingsBoard bằng HTTP POST:
+```text
+time_ms,node_id,packet_id,t_air,h_air,h_soil,v_bat,adc,soil_status,error_flag,rssi,snr,sleep_min,soil_threshold,filter_mode,pump_time,control_mode,duty_cycle
+```
+
+ThingsBoard HTTP telemetry:
 
 ```json
 {
@@ -278,52 +236,45 @@ Telemetry gửi lên ThingsBoard bằng HTTP POST:
   "RSSI": -80,
   "Error_Flag": 0,
   "Alert": "LIGHT_DRY",
-  "PumpTime": 3
+  "PumpTime": 3,
+  "Sleep_Min": 30,
+  "Soil_Threshold": 20,
+  "Filter_Mode": 0,
+  "Config_Pump_Time": 5,
+  "Control_Mode": 1,
+  "Duty_Cycle": 1
 }
 ```
 
-## 11. Thuật toán mô phỏng tưới tiêu
+## 11. PumpTime Và Alert
 
-Gateway tính `PumpTime` trong `computePumpTime()`.
-Đây chỉ là giá trị gợi ý/mô phỏng, không có mạch bơm trong hướng dẫn phần cứng.
+Gateway tính `Alert` và `PumpTime` trong `gateway_logic.cpp`. Đây là giá trị gợi ý/mô phỏng, được log và upload cloud.
 
-Nếu `errorFlag != 0`:
+Nếu `errorFlag != 0`, `PumpTime = 0` và alert là `SENSOR_ERROR`.
 
-```text
-PumpTime = 0
-```
+PumpTime cơ sở:
 
-Theo độ ẩm đất:
-
-| Điều kiện | PumpTime cơ sở |
+| Điều kiện | PumpTime |
 | --- | ---: |
-| `H_soil > 42` | 0 s |
-| `33 < H_soil <= 42` | 0 s |
-| `24 < H_soil <= 33` | 3 s |
-| `15 < H_soil <= 24` | 6 s |
-| `H_soil <= 15` | 10 s |
+| `H_soil > 42` | 0s |
+| `33 < H_soil <= 42` | 0s |
+| `24 < H_soil <= 33` | 3s |
+| `15 < H_soil <= 24` | 6s |
+| `H_soil <= 15` | 10s |
 
-Hiệu chỉnh theo môi trường:
+Hiệu chỉnh môi trường:
 
 | Điều kiện | Điều chỉnh |
 | --- | ---: |
-| `T_air > 32 C` | `+2 s` |
-| `H_air < 50 %RH` | `+3 s` |
-| `H_air > 80 %RH` | `-2 s` |
+| `T_air > 32 C` | `+2s` |
+| `H_air < 50 %RH` | `+3s` |
+| `H_air > 80 %RH` | `-2s` |
 
-Kết quả bị giới hạn:
+Kết quả được giới hạn `0..15s`. Gateway chỉ tự gửi `START_PUMP` nếu `EnablePumpHardware=true`; hiện tại cấu hình là `false`.
 
-```text
-0 <= PumpTime <= 15
-```
+## 12. Adaptive Duty Cycle
 
-Giá trị này được in trong Serial log, đưa lên ThingsBoard và có thể hiển thị trên dashboard/cloud. Gateway chỉ tự động gửi `START_PUMP` nếu `EnablePumpHardware = true`; hiện tại cấu hình là `false`, nên đây là phần mô phỏng tính năng.
-
-## 12. Adaptive duty cycle
-
-Node tính thời gian ngủ trong `computeAdaptiveSleepSeconds()`.
-
-Nếu runtime config `dutyCycleMode = FIXED`, node dùng `sleepMinutes` đã lưu trong Preferences.
+Nếu `runtimeConfig.dutyCycleMode = FIXED`, node ngủ theo `runtimeConfig.sleepMinutes`.
 
 Nếu `ADAPTIVE`, node dùng quy tắc:
 
@@ -338,43 +289,44 @@ Nếu `ADAPTIVE`, node dùng quy tắc:
 | `SOIL=OVER_MOISTURE` | 60 phút |
 | Còn lại / `NORMAL` | 30 phút |
 
-Trước khi sleep, node:
+Nếu `EnableFastUrgentSleepTest=true` và đất `URGENT_WATERING`, node có thể ngủ `FastUrgentSleepSeconds = 5` giây để test nhanh. Hiện flag này đang `false`.
 
-- Cho LoRa sleep/end.
-- Tắt SPI.
-- Kéo `SensorPowerPin` LOW.
-- Gọi `esp_sleep_enable_timer_wakeup()`.
-- Gọi `esp_deep_sleep_start()`.
+## 13. Runtime Config Và Command
 
-## 13. Command và runtime config
+Gateway không gửi command riêng ngay lập tức. Command được queue trong `pendingCommands[nodeId]`. Khi node thức dậy và gửi telemetry, gateway chèn command vào ACK.
 
-Gateway không gửi command riêng lẻ ngay lập tức. Command được xếp vào `pendingCommands[nodeId]`.
-Khi node gửi telemetry lần tiếp theo, gateway đưa command vào ACK. Cách này hợp với node tiết kiệm pin vì node chỉ nghe LoRa trong thời gian ngắn sau khi gửi.
-
-Node lưu một số cấu hình bằng ESP32 Preferences namespace `node_cfg`:
+Node lưu config bằng ESP32 Preferences namespace `node_cfg`:
 
 | Key | Ý nghĩa |
 | --- | --- |
 | `soil_th` | Ngưỡng độ ẩm đất |
-| `sleep_min` | Thời gian sleep cố định |
-| `filter` | Mode filter |
-| `pump_s` | Thời gian tưới gợi ý/mô phỏng |
+| `sleep_min` | Sleep fixed |
+| `filter` | Filter mode |
+| `pump_s` | Pump seconds config |
 | `ctrl` | Control mode |
 | `duty` | Duty cycle mode |
 
-Ví dụ gọi command từ trình duyệt:
+Ví dụ:
 
 ```text
 http://<gateway-ip>/command?node=1&cmd=SET_SLEEP_DURATION&param=10
 http://<gateway-ip>/command?node=1&cmd=SET_DUTY_CYCLE&param=ADAPTIVE
+http://<gateway-ip>/command?node=1&cmd=SET_FILTER_MODE&param=MEDIAN
 http://<gateway-ip>/command?node=1&cmd=SET_THRESHOLD&param=20
 ```
 
-## 14. OTA trong code
+Serial command trên gateway cũng được hỗ trợ:
 
-Code có 2 cơ chế OTA:
+```text
+1 SET_SLEEP_DURATION 10
+1 START_PUMP 5
+```
 
-### 14.1. Gateway self-OTA qua WiFi
+## 14. OTA Trong Code
+
+Có 2 cơ chế OTA/cập nhật:
+
+### Gateway self-OTA thật qua WiFi
 
 Endpoint:
 
@@ -382,24 +334,23 @@ Endpoint:
 /self_ota?url=http://server/firmware.bin&md5=optional_md5
 ```
 
-Gateway tải firmware qua HTTP, ghi bằng thư viện `Update`, thành công thì reboot.
-Partition OTA cho gateway được cấu hình trong `partitions_gateway_ota.csv`.
+Gateway tải firmware qua HTTP, ghi bằng `Update`, thành công thì reboot. Partition OTA nằm trong `partitions_gateway_ota.csv`.
 
-### 14.2. Node OTA mô phỏng qua LoRa
+### Node OTA mô phỏng qua LoRa
 
-Khi gateway queue command `START_OTA`, node nhận trong ACK và chạy phiên OTA mô phỏng:
+Khi gateway queue `START_OTA`, node nhận command trong ACK và chạy phiên mô phỏng:
 
-1. Node gửi `OTA_READY`.
-2. Gateway gửi 10 chunk dữ liệu firmware giả lập.
-3. Node check CRC từng chunk.
-4. Node ACK từng chunk.
-5. Nhận đủ chunk thì node gửi `OTA_SUCCESS`.
+1. Node gửi `TYPE=OTA_STATUS,...,STATUS=OTA_READY`.
+2. Gateway gửi 10 chunk giả lập `TYPE=OTA_CHUNK`.
+3. Node kiểm tra CRC từng chunk.
+4. Node trả `ACK`, `NACK_CRC`, `OTA_FAILED_TIMEOUT` hoặc `OTA_SUCCESS`.
+5. Gateway retry mỗi chunk tối đa 3 lần.
 
-Hiện tại đây là mô phỏng giao thức OTA, chưa ghi firmware thật vào flash của node.
+Node không ghi firmware thật vào flash trong luồng này.
 
-## 15. Cách đọc log để debug
+## 15. Debug Nhanh
 
-Node log đúng:
+Log node đúng:
 
 ```text
 ===== EE4552 NODE FIRMWARE =====
@@ -412,57 +363,60 @@ ACK received: TYPE=ACK,...
 Sleep duration: ... min
 ```
 
-Gateway log đúng:
+Log gateway đúng:
 
 ```text
 ===== EE4552 GATEWAY FIRMWARE =====
+Firmware: GW_OTA_TEST_1
 LoRa init OK
+Gateway IP: ...
+HTTP server listening on port 80
+Debug HTTP server listening on port 8080
 Gateway ready
-DATA RX node=1 pid=... T=... H=... Soil=... ADC=... V=... RSSI=... Alert=... PumpTime=...
+DATA RX node=1 pid=...
 ThingsBoard HTTP status: 200
 ACK TX: TYPE=ACK,...
 ```
 
-Nếu cần debug nhanh:
+Gợi ý lỗi thường gặp:
 
-- LoRa lỗi: xem `LoRa init failed`, kiểm tra dây SPI/nguồn/anten.
-- DHT lỗi: `DHT ... ERR=1`, kiểm tra DATA GPIO27, pull-up, nguồn.
-- Soil lỗi: `SOIL ... ERR=1`, kiểm tra AOUT GPIO34 và giá trị ADC.
-- Pin sai: kiểm tra mạch chia áp GPIO35 và `BatteryDividerRatio`.
-- Gateway không lên cloud: kiểm tra WiFi, token ThingsBoard, `EnableCloudUpload`.
+- `LoRa init failed`: kiểm tra nguồn 3.3V, anten, dây SPI, GND chung.
+- `DHT ... ERR=1`: kiểm tra DATA `GPIO27`, pull-up và nguồn DHT22.
+- `SOIL ... ERR=1`: kiểm tra `AOUT -> GPIO34`, nguồn cảm biến và ADC có nằm ngoài `100..4090` không.
+- Pin sai: kiểm tra chia áp `220k/100k`, điểm giữa vào `GPIO35`.
+- Gateway không upload cloud: kiểm tra WiFi, ThingsBoard token và `EnableCloudUpload`.
 
-## 16. Giới hạn hiện tại của code
+## 16. Giới Hạn Hiện Tại
 
-- Môi trường mẫu đang cấu hình `NodeId = 1`, chưa có bảng quản lý nhiều node đầy đủ ngoài mảng `lastPacketIdByNode[256]`.
-- Dashboard history chỉ lưu RAM 64 mẫu, không có database bền vững.
-- ThingsBoard gửi bằng HTTP, chưa dùng MQTT.
-- `PumpTime` là mô phỏng/gợi ý. Không có mạch bơm trong phần cứng hiện tại, và không đấu nối gì vào GPIO25.
-- Node OTA qua LoRa là mô phỏng chunk/CRC/status, chưa flash firmware thật.
-- Gateway self-OTA có ghi firmware thật qua WiFi.
+- Mặc định chỉ dùng `NodeId = 1`; gateway có mảng tracking 256 node nhưng chưa có quản lý node nâng cao.
+- History gateway chỉ là RAM 64 mẫu, mất nguồn là mất history.
+- ThingsBoard dùng HTTP, chưa dùng MQTT.
+- `PumpTime` là gợi ý/mô phỏng trong cấu hình hiện tại.
+- `SET_THRESHOLD`, `SET_FILTER_MODE`, `SET_PUMP_TIME` và `SET_CONTROL_MODE` được lưu vào NVS và gửi lên dashboard/cloud, nhưng thuật toán phân loại đất, lọc soil và tính `PumpTime` hiện vẫn dùng logic cố định trong code.
+- Node OTA qua LoRa là mô phỏng protocol, không flash firmware thật.
+- Gateway self-OTA qua WiFi là OTA thật.
 
-## 17. Tóm tắt một chu kỳ hoạt động
+## 17. Tóm Tắt Một Chu Kỳ
 
 ```text
-Node wake up
-  -> bật nguồn cảm biến
-  -> đọc DHT22
-  -> đọc cảm biến độ ẩm đất
-  -> đo pin
-  -> tạo TYPE=DATA + CRC
-  -> gửi LoRa cho Gateway
-  -> đợi ACK/command
+Node wake
+  -> bật GPIO32 cấp nguồn cảm biến
+  -> đọc DHT22, soil ADC, battery ADC
+  -> tạo TYPE=DATA + CRC, kèm config node
+  -> gửi LoRa
+  -> chờ TYPE=ACK
   -> thực thi command nếu có
-  -> tính adaptive sleep
-  -> tắt LoRa/cảm biến
+  -> tính sleep fixed/adaptive
+  -> tắt LoRa/SPI, kéo GPIO32 LOW
   -> deep sleep
 
 Gateway chạy liên tục
   -> nghe LoRa
-  -> nhận TYPE=DATA
-  -> check CRC và chống trùng packet
+  -> nhận DATA hoặc OTA_STATUS
+  -> check CRC, chống trùng PID
   -> lưu history RAM
-  -> tính Alert và PumpTime mô phỏng
+  -> tính Alert/PumpTime
   -> upload ThingsBoard
-  -> gửi TYPE=ACK về Node
-  -> phục vụ dashboard/export/command qua web
+  -> gửi ACK/command về node
+  -> phục vụ dashboard, CSV, command, self-OTA qua HTTP
 ```

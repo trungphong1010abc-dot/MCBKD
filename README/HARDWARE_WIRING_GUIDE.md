@@ -1,217 +1,201 @@
-# Hướng dẫn kết nối phần cứng EE4552 WSN
+# Hướng Dẫn Kết Nối Phần Cứng EE4552 WSN
 
-File này tổng hợp lại cách nối dây theo code hiện tại trong `src/project_config.h`.
-Dùng file này để lắp lại mạch nhanh sau khi tháo breadboard.
-
-## 1. Tổng quan phần cứng
+Tài liệu này được cập nhật theo code hiện tại trong `src/project_config.h`, `src/node_main.cpp` và `src/gateway_*.cpp`.
 
 Hệ thống có 2 ESP32:
 
-- `Node`: đọc DHT22, cảm biến độ ẩm đất, đo điện áp pin, gửi LoRa.
-- `Gateway`: nhận LoRa từ node, kết nối WiFi và gửi dữ liệu lên ThingsBoard.
+- `node`: đọc DHT22, cảm biến độ ẩm đất, điện áp pin, gửi telemetry qua LoRa rồi deep sleep.
+- `gateway`: nhận LoRa, kết nối WiFi, mở dashboard HTTP, xuất CSV, gửi telemetry lên ThingsBoard và trả ACK/command cho node.
 
-Cả `Node` và `Gateway` đều dùng cùng sơ đồ chân LoRa RA-02.
-Chỉ `Node` mới cần DHT22, cảm biến đất và mạch chia áp pin.
+## 1. Bảng Chân Đang Dùng
 
-## 2. Bảng chân ESP32 đang dùng trong code
+| Chức năng | GPIO ESP32 | Dùng trên | Ghi chú |
+| --- | ---: | --- | --- |
+| DHT22 DATA | 27 | Node | Driver DHT22 tự viết |
+| Soil sensor AOUT | 34 | Node | ADC1, input-only |
+| Battery ADC | 35 | Node | ADC1, input-only, qua chia áp 220k/100k |
+| Sensor power control | 32 | Node | HIGH khi node thức, LOW trước deep sleep |
+| Pump output legacy/test | 25 | Node | `EnablePumpHardware=false`; không khuyến nghị đấu bơm thật trong cấu hình hiện tại |
+| LoRa NSS / CS | 5 | Node + Gateway | SPI chip select |
+| LoRa RST | 14 | Node + Gateway | Reset module LoRa |
+| LoRa DIO0 | 26 | Node + Gateway | Interrupt RX/TX |
+| LoRa SCK | 18 | Node + Gateway | SPI clock |
+| LoRa MISO | 19 | Node + Gateway | SPI MISO |
+| LoRa MOSI | 23 | Node + Gateway | SPI MOSI |
 
-| Chức năng | ESP32 GPIO | Ghi chú |
-| --- | ---: | --- |
-| DHT22 DATA | GPIO27 | Node |
-| Soil sensor AOUT | GPIO34 | Node, ADC1, input only |
-| Battery ADC | GPIO35 | Node, ADC1, input only |
-| Sensor power control | GPIO32 | Node, dự phòng điều khiển nguồn cảm biến |
-| Pump control placeholder | GPIO25 | Node, hiện đang không bật phần cứng bơm |
-| LoRa NSS / CS | GPIO5 | Node và Gateway |
-| LoRa RST | GPIO14 | Node và Gateway |
-| LoRa DIO0 | GPIO26 | Node và Gateway |
-| LoRa SCK | GPIO18 | Node và Gateway |
-| LoRa MISO | GPIO19 | Node và Gateway |
-| LoRa MOSI | GPIO23 | Node và Gateway |
+## 2. Kết Nối LoRa RA-02 Với ESP32
 
-## 3. Kết nối LoRa RA-02 với ESP32
-
-Dùng bảng này cho cả `Node` và `Gateway`.
+Dùng cùng một sơ đồ cho cả node và gateway.
 
 | LoRa RA-02 | ESP32 | Ghi chú |
 | --- | --- | --- |
 | `3.3V` | `3V3` | Không cấp 5V vào RA-02 |
-| `GND` | `GND` | Nối chung mass |
-| `NSS` / `CS` | `GPIO5` | Chip select SPI |
+| `GND` | `GND` | GND phải nối chung |
+| `NSS` / `CS` | `GPIO5` | SPI chip select |
 | `SCK` | `GPIO18` | SPI clock |
 | `MISO` | `GPIO19` | SPI MISO |
 | `MOSI` | `GPIO23` | SPI MOSI |
 | `RST` | `GPIO14` | Reset LoRa |
-| `DIO0` | `GPIO26` | Interrupt RX/TX |
+| `DIO0` | `GPIO26` | Interrupt |
 
-Khuyến nghị phần cứng cho LoRa:
+Khuyến nghị:
 
-- Gắn anten trước khi truyền.
-- Đặt 1 tụ gốm `104` / `100nF` sát chân `3.3V-GND` của RA-02.
-- Nên thêm 1 tụ hóa `10uF` đến `100uF` sát chân `3.3V-GND` của RA-02 nếu hay gặp `LoRa init failed`.
-- Dây SPI nên ngắn, cắm chắc, GND phải nối chung với ESP32.
+- Luôn gắn anten trước khi truyền LoRa.
+- RA-02 chỉ dùng 3.3V; cấp 5V có thể làm hỏng module.
+- Đặt tụ gốm `100nF` sát chân `3.3V-GND` của RA-02.
+- Nếu hay gặp `LoRa init failed`, thêm tụ `10uF..100uF` gần module LoRa và rút ngắn dây SPI.
 
-## 4. Kết nối DHT22 với Node ESP32
+## 3. Kết Nối DHT22 Với Node
 
 | DHT22 | ESP32 Node | Ghi chú |
 | --- | --- | --- |
-| `VCC` / `+` | `3V3` | Có thể dùng 3.3V |
-| `GND` / `-` | `GND` | Nối chung mass |
-| `DATA` / `OUT` | `GPIO27` | Chân đọc DHT22 trong code |
+| `VCC` / `+` | `GPIO32` hoặc `3V3` | Khuyến nghị `GPIO32` nếu muốn tắt nguồn cảm biến khi deep sleep |
+| `GND` / `-` | `GND` | GND chung |
+| `DATA` / `OUT` | `GPIO27` | Pin đọc trong code |
 
 Ghi chú:
 
-- Nếu DHT22 đang là cảm biến rời 3 chân module thì thường đã có điện trở kéo lên.
-- Nếu dùng DHT22 raw 4 chân, nên thêm điện trở kéo lên `4.7k` đến `10k` giữa `DATA` và `3V3`.
-- Đặt 1 tụ gốm `104` / `100nF` gần `VCC-GND` của DHT22 nếu dây dài.
+- `GPIO32` được code kéo HIGH khi node thức và LOW trước khi ngủ. Nếu module DHT22 tiêu thụ thấp, có thể cấp qua chân này để tiết kiệm pin.
+- Nếu muốn cấp nguồn ổn định liên tục, nối `VCC` DHT22 vào `3V3`.
+- Module DHT22 3 chân thường đã có điện trở kéo lên. Nếu dùng cảm biến raw 4 chân, thêm điện trở `4.7k..10k` giữa `DATA` và `VCC`.
 
-## 5. Kết nối cảm biến độ ẩm đất điện dung với Node ESP32
+## 4. Kết Nối Cảm Biến Độ Ẩm Đất Điện Dung
 
-| Cảm biến độ ẩm đất | ESP32 Node | Ghi chú |
+| Cảm biến đất | ESP32 Node | Ghi chú |
 | --- | --- | --- |
-| `VCC` | `3V3` | Cấp nguồn cảm biến |
-| `GND` | `GND` | Nối chung mass |
-| `AOUT` | `GPIO34` | ADC1 input |
+| `VCC` | `GPIO32` hoặc `3V3` | Khuyến nghị `GPIO32` để tắt nguồn khi deep sleep |
+| `GND` | `GND` | GND chung |
+| `AOUT` | `GPIO34` | ADC1 input-only |
 
-Ghi chú calib đang dùng trong code:
+Code đang dùng 11 mẫu ADC, bỏ 3 mẫu đầu, lọc median và kiểm tra ADC hợp lệ trong khoảng `100..4090`.
 
-| Mốc calib | Giá trị ADC |
+Calibration hiện tại:
+
+| Mốc | ADC |
 | --- | ---: |
 | Đất khô / dry | `3400` |
 | Đất ướt / wet | `1200` |
 
-Công thức đang dùng:
+Công thức:
 
 ```text
 H_soil = (ADC_dry - ADC_filtered) * 60 / (ADC_dry - ADC_wet)
 ```
 
-Kết quả bị giới hạn trong khoảng `0..60 %Vol`.
+Kết quả được giới hạn trong `0..60 %Vol`.
 
-## 6. Mạch chia áp đo pin bằng 220k và 100k
+## 5. Mạch Chia Áp Đo Pin
 
-ESP32 ADC không được đo trực tiếp điện áp pin/nguồn 5V. Phải dùng mạch chia áp.
-Code đang dùng:
-
-```text
-BatteryAdcPin = GPIO35
-BatteryDividerRatio = 3.2
-Rtop = 220k
-Rbottom = 100k
-```
-
-Sơ đồ nối:
+ESP32 không được đo trực tiếp pin hoặc nguồn 5V bằng ADC. Code đọc `GPIO35` và nhân với `BatteryDividerRatio = 3.2`, tương ứng mạch `220k/100k`.
 
 ```text
 VIN / Vbat / 5V cần đo
         |
       220k
         |
-        +----> GPIO35 của ESP32
+        +----> GPIO35
         |
       100k
         |
        GND
 ```
 
-Bảng nối chi tiết:
-
-| Điểm mạch | Nối tới đâu |
+| Điểm mạch | Nối tới |
 | --- | --- |
-| Đầu trên điện trở `220k` | `VIN` / cực dương pin / nguồn cần đo |
-| Đầu dưới điện trở `220k` | Nối chung với đầu trên `100k` và `GPIO35` |
-| Đầu trên điện trở `100k` | Điểm giữa mạch chia áp |
-| Đầu dưới điện trở `100k` | `GND` |
+| Đầu trên `220k` | Cực dương pin hoặc nguồn cần đo |
 | Điểm giữa `220k-100k` | `GPIO35` |
+| Đầu dưới `100k` | `GND` |
 | GND nguồn/pin | `GND` ESP32 |
 
-Ví dụ nếu nguồn cần đo là `5.0V`, điện áp tại `GPIO35` xấp xỉ:
+Ví dụ với nguồn 5.0V:
 
 ```text
 V_gpio35 = 5.0 * 100k / (220k + 100k) = 1.56V
-```
-
-Code sẽ nhân ngược với hệ số `3.2`:
-
-```text
 V_bat = V_gpio35 * 3.2
 ```
 
 Lưu ý:
 
 - Không nối `VIN/5V` trực tiếp vào `GPIO35`.
-- GPIO35 chỉ là input, không xuất được tín hiệu.
-- Nối chung GND của pin/adapter với GND ESP32.
-- Nếu số đo sai lệch vài phần trăm, có thể hiệu chỉnh `BatteryDividerRatio` theo đồng hồ đo thực tế.
+- `GPIO35` chỉ là input, không xuất tín hiệu được.
+- Nếu số đo lệch so với đồng hồ, hiệu chỉnh `BatteryDividerRatio` trong `project_config.h`.
 
-## 7. Kết nối Node đầy đủ
+## 6. Kết Nối Node Đầy Đủ
 
 | Thiết bị | Chân thiết bị | Nối đến ESP32 Node |
 | --- | --- | --- |
 | LoRa RA-02 | `3.3V` | `3V3` |
 | LoRa RA-02 | `GND` | `GND` |
-| LoRa RA-02 | `NSS` | `GPIO5` |
+| LoRa RA-02 | `NSS` / `CS` | `GPIO5` |
 | LoRa RA-02 | `SCK` | `GPIO18` |
 | LoRa RA-02 | `MISO` | `GPIO19` |
 | LoRa RA-02 | `MOSI` | `GPIO23` |
 | LoRa RA-02 | `RST` | `GPIO14` |
 | LoRa RA-02 | `DIO0` | `GPIO26` |
-| DHT22 | `VCC` | `3V3` |
+| DHT22 | `VCC` | `GPIO32` hoặc `3V3` |
 | DHT22 | `GND` | `GND` |
 | DHT22 | `DATA` | `GPIO27` |
-| Soil sensor | `VCC` | `3V3` |
+| Soil sensor | `VCC` | `GPIO32` hoặc `3V3` |
 | Soil sensor | `GND` | `GND` |
 | Soil sensor | `AOUT` | `GPIO34` |
 | Battery divider | Điểm giữa `220k-100k` | `GPIO35` |
-| Battery divider | Đầu trên `220k` | `VIN` / nguồn cần đo |
+| Battery divider | Đầu trên `220k` | Pin/nguồn cần đo |
 | Battery divider | Đầu dưới `100k` | `GND` |
 
-## 8. Kết nối Gateway đầy đủ
+`GPIO25` là output bơm legacy/test. Gateway không tự gửi lệnh bơm vì `EnablePumpHardware=false`, nhưng nếu người dùng queue thủ công `START_PUMP`, node vẫn có thể kéo `GPIO25` trong thời gian command yêu cầu. Không đấu bơm thật trực tiếp vào GPIO; nếu cần bơm thật phải có driver transistor/MOSFET, diode bảo vệ và nguồn riêng.
 
-Gateway chỉ cần ESP32 + LoRa RA-02 + WiFi.
+## 7. Kết Nối Gateway Đầy Đủ
+
+Gateway chỉ cần ESP32, RA-02 và WiFi.
 
 | Thiết bị | Chân thiết bị | Nối đến ESP32 Gateway |
 | --- | --- | --- |
 | LoRa RA-02 | `3.3V` | `3V3` |
 | LoRa RA-02 | `GND` | `GND` |
-| LoRa RA-02 | `NSS` | `GPIO5` |
+| LoRa RA-02 | `NSS` / `CS` | `GPIO5` |
 | LoRa RA-02 | `SCK` | `GPIO18` |
 | LoRa RA-02 | `MISO` | `GPIO19` |
 | LoRa RA-02 | `MOSI` | `GPIO23` |
 | LoRa RA-02 | `RST` | `GPIO14` |
 | LoRa RA-02 | `DIO0` | `GPIO26` |
 
-## 9. Checklist trước khi cấp nguồn
+## 8. Checklist Trước Khi Cấp Nguồn
 
-- LoRa RA-02 chỉ cấp `3.3V`, không cấp `5V`.
-- Node và gateway đều gắn anten LoRa.
-- Tất cả GND nối chung trong từng mạch.
-- Soil sensor `AOUT` vào `GPIO34`, không vào GPIO35.
-- Mạch chia áp pin vào `GPIO35`, không vào GPIO34.
-- DHT22 DATA vào `GPIO27`.
+- RA-02 chỉ cấp `3.3V`, không cấp `5V`.
+- Node và gateway đều đã gắn anten LoRa.
+- GND của ESP32, LoRa, cảm biến và nguồn đo pin phải nối chung.
+- Soil `AOUT` vào `GPIO34`.
+- Battery divider vào `GPIO35`.
+- DHT22 `DATA` vào `GPIO27`.
 - LoRa SPI đúng: `SCK=18`, `MISO=19`, `MOSI=23`, `NSS=5`, `RST=14`, `DIO0=26`.
-- Tụ gốm `104` gần LoRa và cảm biến; nên có thêm tụ hóa gần LoRa nếu breadboard không ổn định.
+- Nếu cấp cảm biến qua `GPIO32`, bảo đảm tổng dòng cảm biến nhỏ và dây cấp nguồn ngắn.
 
-## 10. Dấu hiệu test đúng
+## 9. Log Test Đúng
 
-Node serial:
+Node:
 
 ```text
+===== EE4552 NODE FIRMWARE =====
 LoRa init OK
-DHT: T=... H=... ERR=0
-SOIL: ADC=... H=... %Vol status=...
+DHT: T=... C H=... %RH ERR=0
+SOIL: ADC=... H=... %Vol status=... ERR=0
 Battery: ... V
-LoRa TX try 1: ...
-ACK received: ...
-Sleep duration: 5 min
+LoRa TX: TYPE=DATA,...
+ACK received: TYPE=ACK,...
+Sleep duration: ... min
 ```
 
-Gateway serial:
+Gateway:
 
 ```text
+===== EE4552 GATEWAY FIRMWARE =====
+Firmware: GW_OTA_TEST_1
 LoRa init OK
+Gateway IP: ...
+HTTP server listening on port 80
+Debug HTTP server listening on port 8080
 Gateway ready
 DATA RX node=1 pid=...
 ThingsBoard HTTP status: 200
-ACK TX: ...
+ACK TX: TYPE=ACK,...
 ```
