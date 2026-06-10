@@ -152,17 +152,24 @@ TYPE=DATA,NODE=1,PID=1,T=30.1,HA=70.2,HS=25.0,VB=4.05,SOIL=LIGHT_DRY,CRC=....
 ### Flow gửi DATA và nhận ACK
 
 ```mermaid
-sequenceDiagram
-    participant N as Node
-    participant G as Gateway
-
-    N->>G: Gửi DATA cảm biến
-    G->>G: Kiểm tra CRC
-    G->>G: Lưu dữ liệu nếu hợp lệ
-    G->>N: Gửi ACK, có thể kèm command
-    N->>N: Kiểm tra ACK
-    N->>N: Thực hiện command nếu có
-    N->>N: Deep sleep
+flowchart TD
+    A[Node đọc cảm biến] --> B[Node tạo gói DATA]
+    B --> C[Node gửi DATA qua LoRa]
+    C --> D[Gateway nhận DATA]
+    D --> E{CRC có đúng không?}
+    E -- Không --> F[Gateway bỏ packet lỗi]
+    E -- Có --> G[Gateway lưu dữ liệu]
+    G --> H{Gateway có command chờ gửi?}
+    H -- Có --> I[Gửi ACK kèm command]
+    H -- Không --> J[Gửi ACK thường]
+    I --> K[Node nhận ACK]
+    J --> K
+    K --> L{ACK có command?}
+    L -- Có --> M[Node thực hiện command]
+    L -- Không --> N[Node bỏ qua command]
+    M --> O[Node deep sleep]
+    N --> O
+    F --> P[Kết thúc xử lý packet]
 ```
 
 ### CRC dùng để làm gì?
@@ -199,21 +206,26 @@ Gateway làm các việc chính sau:
 
 ```mermaid
 flowchart TD
-    A[Gateway khởi động] --> B[Khởi tạo LoRa]
-    B --> C[Kết nối WiFi]
-    C --> D[Chạy web server]
-    D --> E[Chờ dữ liệu LoRa]
-    E --> F{Có packet?}
-    F -- Không --> E
-    F -- Có --> G{CRC hợp lệ?}
-    G -- Không --> H[Bỏ packet]
-    H --> E
-    G -- Có --> I[Lưu dữ liệu]
-    I --> J[Cập nhật dashboard]
-    J --> K[Upload cloud nếu bật]
-    K --> L[Gửi ACK/command về node]
-    L --> E
+    A[Gateway bật nguồn] --> B[Khởi tạo LoRa, WiFi, Web]
+    B --> C[Gateway luôn chờ DATA từ node]
+
+    C --> D[Node gửi DATA tới gateway]
+    D --> E[Gateway kiểm tra CRC]
+
+    E --> F{DATA hợp lệ?}
+    F -- Không --> G[Bỏ packet lỗi]
+    G --> C
+
+    F -- Có --> H[Lưu dữ liệu cảm biến]
+    H --> I[Cập nhật web dashboard]
+    I --> J[Gửi ThingsBoard nếu đã bật cloud]
+    J --> K[Gửi ACK hoặc command về node]
+    K --> C
 ```
+
+Flow này có thể hiểu đơn giản là:
+
+> Gateway sau khi khởi động sẽ đứng chờ dữ liệu từ node. Mỗi khi có DATA gửi lên, gateway kiểm tra lỗi CRC. Nếu packet sai thì bỏ qua, nếu đúng thì lưu dữ liệu, cập nhật dashboard, gửi cloud nếu cần, rồi phản hồi ACK/command cho node. Sau đó gateway quay lại trạng thái chờ dữ liệu mới.
 
 ### Vì sao gateway cần pending command?
 
@@ -309,20 +321,33 @@ flowchart TD
 ### Flow node OTA mô phỏng
 
 ```mermaid
-sequenceDiagram
-    participant U as User
-    participant G as Gateway
-    participant N as Node
+flowchart TD
+    A[User bấm START_OTA trên web] --> B[Gateway lưu lệnh START_OTA]
+    B --> C[Gateway chờ node thức dậy]
 
-    U->>G: Gửi lệnh START_OTA
-    G->>G: Lưu lệnh chờ node thức dậy
-    N->>G: Gửi DATA
-    G->>N: ACK + START_OTA
-    N->>G: Báo OTA_READY
-    G->>N: Gửi OTA_CHUNK
-    N->>G: ACK từng chunk
-    N->>G: Báo OTA_SUCCESS khi nhận đủ
+    C --> D[Node gửi DATA như bình thường]
+    D --> E[Gateway trả ACK kèm START_OTA]
+
+    E --> F[Node chuyển sang chế độ OTA mô phỏng]
+    F --> G[Node báo OTA_READY]
+    G --> H[Gateway gửi từng OTA_CHUNK]
+    H --> I[Node kiểm tra chunk]
+
+    I --> J{Chunk đúng?}
+    J -- Không --> K[Node báo lỗi chunk]
+    K --> H
+
+    J -- Có --> L{Đã nhận đủ chunk?}
+    L -- Chưa --> M[Node ACK chunk]
+    M --> H
+
+    L -- Rồi --> N[Node báo OTA_SUCCESS]
+    N --> O[Kết thúc OTA mô phỏng]
 ```
+
+Flow này có thể hiểu đơn giản là:
+
+> Người dùng không gửi OTA trực tiếp cho node ngay được vì node có thể đang ngủ. Gateway sẽ lưu lệnh START_OTA trước. Khi node thức dậy và gửi DATA, gateway mới gửi lệnh START_OTA kèm ACK. Sau đó gateway gửi từng chunk OTA, node kiểm tra từng chunk và báo thành công khi nhận đủ.
 
 Điểm quan trọng cần nói rõ:
 
