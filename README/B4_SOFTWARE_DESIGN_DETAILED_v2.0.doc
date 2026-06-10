@@ -1,0 +1,550 @@
+﻿<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { font-family: Calibri, Arial, sans-serif; font-size: 12pt; line-height: 1.35; }
+h1 { font-size: 22pt; color: #1f4e79; }
+h2 { font-size: 17pt; color: #2f75b5; margin-top: 18pt; }
+h3 { font-size: 14pt; color: #1f4e79; }
+table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
+td, th { border: 1px solid #999; padding: 5px; vertical-align: top; }
+pre { background: #f3f3f3; border: 1px solid #ccc; padding: 8px; white-space: pre-wrap; font-family: Consolas, monospace; font-size: 10pt; }
+hr { border: 0; border-top: 1px solid #bbb; }
+</style>
+</head>
+<body><h1>B4. Thiết Kế Phần Mềm Cho Hệ Thống - v2.0</h1>
+<p></p>
+<p>T&#224;i liệu n&#224;y l&#224; bản r&#250;t gọn, d&#249;ng để thuyết tr&#236;nh. Nội dung tập trung v&#224;o &#253; ch&#237;nh v&#224; c&#225;c flow dễ hiểu của hệ thống.</p>
+<p></p>
+<p>Hệ thống gồm 2 phần mềm chạy tr&#234;n 2 ESP32:</p>
+<p></p>
+<p>• **Node cảm biến**: đo nhiệt độ, độ ẩm kh&#244;ng kh&#237;, độ ẩm đất, pin; gửi dữ liệu qua LoRa; nhận lệnh; sau đ&#243; ngủ để tiết kiệm pin.</p>
+<p>• **Gateway**: nhận dữ liệu LoRa từ node; kiểm tra dữ liệu; hiển thị web dashboard; xuất CSV; gửi dữ liệu l&#234;n ThingsBoard; gửi lệnh ngược lại cho node.</p>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.1. Tổng quan hoạt động</h2>
+<p></p>
+<h3>&#221; tưởng ch&#237;nh</h3>
+<p></p>
+<p>Node kh&#244;ng chạy li&#234;n tục. Node chỉ thức dậy trong thời gian ngắn để đo cảm biến, gửi dữ liệu, nhận phản hồi rồi quay lại deep sleep. Gateway chạy li&#234;n tục để nhận dữ liệu v&#224; hiển thị cho người d&#249;ng.</p>
+<p></p>
+<h3>Flow tổng qu&#225;t</h3>
+<p></p>
+<pre>flowchart LR
+    A[Node đo cảm biến] --&gt; B[Gửi DATA qua LoRa]
+    B --&gt; C[Gateway nhận dữ liệu]
+    C --&gt; D[Gateway kiểm tra CRC]
+    D --&gt; E[Lưu v&#224; hiển thị dashboard]
+    E --&gt; F[Gửi cloud nếu bật]
+    D --&gt; G[Gửi ACK hoặc command về node]
+    G --&gt; H[Node xử l&#253; lệnh]
+    H --&gt; I[Node deep sleep]</pre>
+<p></p>
+<p>N&#243;i ngắn gọn khi thuyết tr&#236;nh:</p>
+<p></p>
+<p>&gt; Node đo dữ liệu rồi gửi l&#234;n gateway bằng LoRa. Gateway kiểm tra, lưu, hiển thị l&#234;n web v&#224; c&#243; thể gửi dữ liệu l&#234;n ThingsBoard. Nếu c&#243; lệnh điều khiển, gateway gửi k&#232;m trong ACK để node nhận v&#224; thực hiện.</p>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.2. Flow của node cảm biến</h2>
+<p></p>
+<h3>Chức năng của node</h3>
+<p></p>
+<p>Node l&#224;m c&#225;c việc ch&#237;nh sau:</p>
+<p></p>
+<p>1. Thức dậy từ deep sleep.</p>
+<p>2. Bật nguồn cảm biến.</p>
+<p>3. Đọc DHT22, cảm biến đất v&#224; điện &#225;p pin.</p>
+<p>4. Đ&#243;ng g&#243;i dữ liệu th&#224;nh packet `DATA`.</p>
+<p>5. Gửi packet qua LoRa.</p>
+<p>6. Chờ gateway trả `ACK`.</p>
+<p>7. Nếu ACK c&#243; command th&#236; thực hiện command.</p>
+<p>8. Tắt cảm biến v&#224; LoRa.</p>
+<p>9. Quay lại deep sleep.</p>
+<p></p>
+<h3>Flow node r&#250;t gọn</h3>
+<p></p>
+<pre>flowchart TD
+    A[Node thức dậy] --&gt; B[Bật cảm biến]
+    B --&gt; C[Đọc nhiệt độ, độ ẩm, đất, pin]
+    C --&gt; D[Tạo g&#243;i DATA + CRC]
+    D --&gt; E[Gửi qua LoRa]
+    E --&gt; F[Chờ ACK từ gateway]
+    F --&gt; G{C&#243; ACK hợp lệ?}
+    G -- Kh&#244;ng --&gt; H[Bỏ qua lệnh]
+    G -- C&#243; --&gt; I{C&#243; command?}
+    I -- C&#243; --&gt; J[Thực hiện command]
+    I -- Kh&#244;ng --&gt; K[Kh&#244;ng l&#224;m g&#236; th&#234;m]
+    J --&gt; L[Tắt cảm biến v&#224; LoRa]
+    H --&gt; L
+    K --&gt; L
+    L --&gt; M[Deep sleep]</pre>
+<p></p>
+<h3>C&#225;c command node c&#243; thể nhận</h3>
+<p></p>
+<table>
+<tr>
+<td>Command</td>
+<td>&#221; nghĩa dễ hiểu</td>
+</tr>
+<tr>
+<td>`SET_SLEEP_DURATION`</td>
+<td>Đổi thời gian ngủ của node</td>
+</tr>
+<tr>
+<td>`SET_THRESHOLD`</td>
+<td>Đổi ngưỡng độ ẩm đất</td>
+</tr>
+<tr>
+<td>`SET_FILTER_MODE`</td>
+<td>Đổi kiểu lọc dữ liệu</td>
+</tr>
+<tr>
+<td>`SET_PUMP_TIME`</td>
+<td>Đổi thời gian bơm cấu h&#236;nh</td>
+</tr>
+<tr>
+<td>`SET_CONTROL_MODE`</td>
+<td>Đổi chế độ manual/auto</td>
+</tr>
+<tr>
+<td>`SET_DUTY_CYCLE`</td>
+<td>Đổi c&#225;ch t&#237;nh thời gian ngủ</td>
+</tr>
+<tr>
+<td>`START_PUMP`</td>
+<td>Y&#234;u cầu bật bơm nếu phần cứng cho ph&#233;p</td>
+</tr>
+<tr>
+<td>`START_OTA`</td>
+<td>Bắt đầu m&#244; phỏng OTA cho node</td>
+</tr>
+</table>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.3. Flow đọc cảm biến</h2>
+<p></p>
+<h3>DHT22</h3>
+<p></p>
+<p>DHT22 d&#249;ng để đo nhiệt độ v&#224; độ ẩm kh&#244;ng kh&#237;. Code tự đọc t&#237;n hiệu từ cảm biến, sau đ&#243; kiểm tra lỗi.</p>
+<p></p>
+<pre>flowchart TD
+    A[Bắt đầu đọc DHT22] --&gt; B[Gửi t&#237;n hiệu y&#234;u cầu đọc]
+    B --&gt; C[Nhận 40 bit dữ liệu]
+    C --&gt; D{Checksum đ&#250;ng?}
+    D -- Kh&#244;ng --&gt; E[B&#225;o lỗi cảm biến]
+    D -- C&#243; --&gt; F[T&#237;nh nhiệt độ v&#224; độ ẩm]
+    F --&gt; G{Gi&#225; trị hợp l&#253;?}
+    G -- Kh&#244;ng --&gt; E
+    G -- C&#243; --&gt; H[Trả kết quả]</pre>
+<p></p>
+<p>C&#225;ch tr&#236;nh b&#224;y:</p>
+<p></p>
+<p>&gt; DHT22 gửi về dữ liệu dạng bit. Chương tr&#236;nh kiểm tra checksum v&#224; kiểm tra gi&#225; trị c&#243; nằm trong giới hạn hợp l&#253; kh&#244;ng. Nếu hợp lệ th&#236; d&#249;ng kết quả, nếu sai th&#236; b&#225;o lỗi.</p>
+<p></p>
+<h3>Cảm biến độ ẩm đất</h3>
+<p></p>
+<p>Cảm biến đất được đọc qua ADC. Gi&#225; trị ADC được lọc rồi quy đổi ra phần trăm độ ẩm đất.</p>
+<p></p>
+<pre>flowchart TD
+    A[Đọc nhiều mẫu ADC] --&gt; B[Bỏ mẫu nhiễu ban đầu]
+    B --&gt; C[Lọc median]
+    C --&gt; D[Quy đổi sang % độ ẩm đất]
+    D --&gt; E[Ph&#226;n loại trạng th&#225;i đất]</pre>
+<p></p>
+<p>Bảng trạng th&#225;i đất:</p>
+<p></p>
+<table>
+<tr>
+<td>Độ ẩm đất</td>
+<td>Trạng th&#225;i</td>
+<td>&#221; nghĩa</td>
+</tr>
+<tr>
+<td>Tr&#234;n 42%</td>
+<td>`OVER_MOISTURE`</td>
+<td>Đất qu&#225; ẩm</td>
+</tr>
+<tr>
+<td>33% - 42%</td>
+<td>`NORMAL`</td>
+<td>Đất b&#236;nh thường</td>
+</tr>
+<tr>
+<td>24% - 33%</td>
+<td>`LIGHT_DRY`</td>
+<td>Đất hơi kh&#244;</td>
+</tr>
+<tr>
+<td>15% - 24%</td>
+<td>`NEED_WATERING`</td>
+<td>Cần tưới</td>
+</tr>
+<tr>
+<td>Dưới 15%</td>
+<td>`URGENT_WATERING`</td>
+<td>Cần tưới gấp</td>
+</tr>
+</table>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.4. Giao thức truyền LoRa</h2>
+<p></p>
+<p>Hệ thống d&#249;ng packet dạng text `KEY=VALUE`, v&#237; dụ:</p>
+<p></p>
+<pre>TYPE=DATA,NODE=1,PID=1,T=30.1,HA=70.2,HS=25.0,VB=4.05,SOIL=LIGHT_DRY,CRC=....</pre>
+<p></p>
+<h3>C&#225;c loại packet ch&#237;nh</h3>
+<p></p>
+<table>
+<tr>
+<td>Packet</td>
+<td>Chiều truyền</td>
+<td>Mục đ&#237;ch</td>
+</tr>
+<tr>
+<td>`DATA`</td>
+<td>Node → Gateway</td>
+<td>Gửi dữ liệu cảm biến</td>
+</tr>
+<tr>
+<td>`ACK`</td>
+<td>Gateway → Node</td>
+<td>X&#225;c nhận đ&#227; nhận dữ liệu, c&#243; thể k&#232;m command</td>
+</tr>
+<tr>
+<td>`OTA_CHUNK`</td>
+<td>Gateway → Node</td>
+<td>Gửi từng phần dữ liệu OTA m&#244; phỏng</td>
+</tr>
+<tr>
+<td>`OTA_STATUS`</td>
+<td>Node → Gateway</td>
+<td>B&#225;o trạng th&#225;i OTA m&#244; phỏng</td>
+</tr>
+</table>
+<p></p>
+<h3>Flow gửi DATA v&#224; nhận ACK</h3>
+<p></p>
+<pre>sequenceDiagram
+    participant N as Node
+    participant G as Gateway
+
+    N-&gt;&gt;G: Gửi DATA cảm biến
+    G-&gt;&gt;G: Kiểm tra CRC
+    G-&gt;&gt;G: Lưu dữ liệu nếu hợp lệ
+    G-&gt;&gt;N: Gửi ACK, c&#243; thể k&#232;m command
+    N-&gt;&gt;N: Kiểm tra ACK
+    N-&gt;&gt;N: Thực hiện command nếu c&#243;
+    N-&gt;&gt;N: Deep sleep</pre>
+<p></p>
+<h3>CRC d&#249;ng để l&#224;m g&#236;?</h3>
+<p></p>
+<p>CRC l&#224; m&#227; kiểm tra lỗi. Khi gửi packet, thiết bị gửi sẽ t&#237;nh CRC v&#224; gắn v&#224;o cuối packet. Thiết bị nhận t&#237;nh lại CRC. Nếu hai CRC giống nhau th&#236; dữ liệu được xem l&#224; hợp lệ, nếu kh&#225;c nhau th&#236; packet bị lỗi v&#224; bị bỏ qua.</p>
+<p></p>
+<pre>flowchart TD
+    A[Tạo packet] --&gt; B[T&#237;nh CRC]
+    B --&gt; C[Gửi packet]
+    C --&gt; D[Thiết bị nhận t&#237;nh lại CRC]
+    D --&gt; E{CRC khớp?}
+    E -- C&#243; --&gt; F[Xử l&#253; packet]
+    E -- Kh&#244;ng --&gt; G[Bỏ packet]</pre>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.5. Flow của gateway</h2>
+<p></p>
+<h3>Chức năng của gateway</h3>
+<p></p>
+<p>Gateway l&#224;m c&#225;c việc ch&#237;nh sau:</p>
+<p></p>
+<p>1. Khởi động LoRa, WiFi v&#224; web server.</p>
+<p>2. Lu&#244;n lắng nghe packet từ node.</p>
+<p>3. Kiểm tra CRC của packet.</p>
+<p>4. Lưu dữ liệu mới v&#224;o history.</p>
+<p>5. Hiển thị dữ liệu tr&#234;n web dashboard.</p>
+<p>6. Upload ThingsBoard nếu được cấu h&#236;nh.</p>
+<p>7. Gửi ACK hoặc command về node.</p>
+<p></p>
+<h3>Flow gateway r&#250;t gọn</h3>
+<p></p>
+<pre>flowchart TD
+    A[Gateway khởi động] --&gt; B[Khởi tạo LoRa]
+    B --&gt; C[Kết nối WiFi]
+    C --&gt; D[Chạy web server]
+    D --&gt; E[Chờ dữ liệu LoRa]
+    E --&gt; F{C&#243; packet?}
+    F -- Kh&#244;ng --&gt; E
+    F -- C&#243; --&gt; G{CRC hợp lệ?}
+    G -- Kh&#244;ng --&gt; H[Bỏ packet]
+    H --&gt; E
+    G -- C&#243; --&gt; I[Lưu dữ liệu]
+    I --&gt; J[Cập nhật dashboard]
+    J --&gt; K[Upload cloud nếu bật]
+    K --&gt; L[Gửi ACK/command về node]
+    L --&gt; E</pre>
+<p></p>
+<h3>V&#236; sao gateway cần pending command?</h3>
+<p></p>
+<p>Node thường đang ngủ n&#234;n gateway kh&#244;ng thể gửi lệnh bất kỳ l&#250;c n&#224;o. V&#236; vậy gateway phải lưu lệnh trước. Khi node thức dậy v&#224; gửi DATA, gateway mới gửi command k&#232;m trong ACK.</p>
+<p></p>
+<pre>flowchart TD
+    A[Người d&#249;ng gửi lệnh tr&#234;n web] --&gt; B[Gateway lưu lệnh v&#224;o h&#224;ng đợi]
+    B --&gt; C[Chờ node thức dậy gửi DATA]
+    C --&gt; D[Gateway gửi ACK k&#232;m command]
+    D --&gt; E[Node nhận v&#224; thực hiện lệnh]</pre>
+<p></p>
+<p>C&#225;ch n&#243;i khi thuyết tr&#236;nh:</p>
+<p></p>
+<p>&gt; V&#236; node tiết kiệm pin n&#234;n phần lớn thời gian n&#243; ngủ. Gateway muốn gửi lệnh th&#236; phải chờ node thức dậy. Do đ&#243; lệnh được lưu tạm trong gateway v&#224; gửi k&#232;m ACK khi node gửi dữ liệu l&#234;n.</p>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.6. Web dashboard v&#224; cloud</h2>
+<p></p>
+<h3>Web dashboard</h3>
+<p></p>
+<p>Gateway tạo web server để người d&#249;ng xem dữ liệu bằng tr&#236;nh duyệt.</p>
+<p></p>
+<p>C&#225;c đường dẫn ch&#237;nh:</p>
+<p></p>
+<table>
+<tr>
+<td>Endpoint</td>
+<td>Chức năng</td>
+</tr>
+<tr>
+<td>`/`</td>
+<td>Trang dashboard ch&#237;nh</td>
+</tr>
+<tr>
+<td>`/ping`</td>
+<td>Kiểm tra gateway c&#242;n hoạt động</td>
+</tr>
+<tr>
+<td>`/export.csv`</td>
+<td>Tải dữ liệu lịch sử dạng CSV</td>
+</tr>
+<tr>
+<td>`/command?node=1&amp;cmd=...&amp;param=...`</td>
+<td>Gửi command xuống node</td>
+</tr>
+<tr>
+<td>`/self_ota?url=...&amp;md5=...`</td>
+<td>OTA firmware cho gateway</td>
+</tr>
+</table>
+<p></p>
+<h3>Flow dashboard</h3>
+<p></p>
+<pre>flowchart TD
+    A[Người d&#249;ng mở tr&#236;nh duyệt] --&gt; B[Gateway nhận HTTP request]
+    B --&gt; C{Request loại n&#224;o?}
+    C -- Dashboard --&gt; D[Trả trang HTML]
+    C -- Export CSV --&gt; E[Trả file CSV]
+    C -- Command --&gt; F[Lưu command chờ gửi node]
+    C -- OTA --&gt; G[Chạy gateway self OTA]</pre>
+<p></p>
+<h3>Upload ThingsBoard</h3>
+<p></p>
+<p>Gateway chỉ upload cloud khi đủ điều kiện:</p>
+<p></p>
+<p>• Bật cấu h&#236;nh upload.</p>
+<p>• WiFi đ&#227; kết nối.</p>
+<p>• C&#243; token ThingsBoard.</p>
+<p>• Dữ liệu telemetry hợp lệ.</p>
+<p></p>
+<pre>flowchart TD
+    A[C&#243; dữ liệu mới] --&gt; B{Bật cloud upload?}
+    B -- Kh&#244;ng --&gt; X[Bỏ qua]
+    B -- C&#243; --&gt; C{WiFi OK?}
+    C -- Kh&#244;ng --&gt; X
+    C -- C&#243; --&gt; D{Token OK?}
+    D -- Kh&#244;ng --&gt; X
+    D -- C&#243; --&gt; E[Gửi HTTP POST l&#234;n ThingsBoard]</pre>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.7. OTA trong hệ thống</h2>
+<p></p>
+<p>Hệ thống c&#243; 2 loại OTA:</p>
+<p></p>
+<table>
+<tr>
+<td>Loại OTA</td>
+<td>Trạng th&#225;i</td>
+<td>Giải th&#237;ch</td>
+</tr>
+<tr>
+<td>Gateway OTA qua WiFi/HTTP</td>
+<td>OTA thật</td>
+<td>Gateway tải file firmware `.bin` v&#224; ghi v&#224;o flash</td>
+</tr>
+<tr>
+<td>Node OTA qua LoRa</td>
+<td>OTA m&#244; phỏng</td>
+<td>Chỉ m&#244; phỏng gửi chunk v&#224; kiểm tra CRC, chưa ghi firmware thật</td>
+</tr>
+</table>
+<p></p>
+<h3>Flow gateway OTA thật</h3>
+<p></p>
+<pre>flowchart TD
+    A[Người d&#249;ng gọi /self_ota] --&gt; B[Gateway tải firmware từ URL]
+    B --&gt; C{Tải th&#224;nh c&#244;ng?}
+    C -- Kh&#244;ng --&gt; D[B&#225;o lỗi]
+    C -- C&#243; --&gt; E[Ghi firmware v&#224;o partition OTA]
+    E --&gt; F{Ghi th&#224;nh c&#244;ng?}
+    F -- Kh&#244;ng --&gt; D
+    F -- C&#243; --&gt; G[Restart gateway]
+    G --&gt; H[Chạy firmware mới]</pre>
+<p></p>
+<h3>Flow node OTA m&#244; phỏng</h3>
+<p></p>
+<pre>sequenceDiagram
+    participant U as User
+    participant G as Gateway
+    participant N as Node
+
+    U-&gt;&gt;G: Gửi lệnh START_OTA
+    G-&gt;&gt;G: Lưu lệnh chờ node thức dậy
+    N-&gt;&gt;G: Gửi DATA
+    G-&gt;&gt;N: ACK + START_OTA
+    N-&gt;&gt;G: B&#225;o OTA_READY
+    G-&gt;&gt;N: Gửi OTA_CHUNK
+    N-&gt;&gt;G: ACK từng chunk
+    N-&gt;&gt;G: B&#225;o OTA_SUCCESS khi nhận đủ</pre>
+<p></p>
+<p>Điểm quan trọng cần n&#243;i r&#245;:</p>
+<p></p>
+<p>&gt; OTA của gateway l&#224; OTA thật. OTA của node qua LoRa hiện tại l&#224; m&#244; phỏng quy tr&#236;nh truyền firmware theo từng chunk v&#224; kiểm tra CRC, chưa ghi firmware thật v&#224;o flash node.</p>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.8. Xử l&#253; lỗi v&#224; tăng độ tin cậy</h2>
+<p></p>
+<p>Hệ thống c&#243; c&#225;c cơ chế gi&#250;p chạy ổn định hơn:</p>
+<p></p>
+<table>
+<tr>
+<td>Cơ chế</td>
+<td>T&#225;c dụng</td>
+</tr>
+<tr>
+<td>CRC</td>
+<td>Ph&#225;t hiện packet LoRa bị lỗi</td>
+</tr>
+<tr>
+<td>ACK</td>
+<td>Node biết gateway đ&#227; nhận dữ liệu</td>
+</tr>
+<tr>
+<td>Timeout ACK</td>
+<td>Node kh&#244;ng chờ qu&#225; l&#226;u, vẫn ngủ để tiết kiệm pin</td>
+</tr>
+<tr>
+<td>Dedup `NODE/PID`</td>
+<td>Gateway kh&#244;ng lưu tr&#249;ng packet</td>
+</tr>
+<tr>
+<td>Retry command</td>
+<td>Tăng khả năng node nhận được lệnh</td>
+</tr>
+<tr>
+<td>Kiểm tra cảm biến</td>
+<td>Ph&#225;t hiện dữ liệu sai hoặc bất thường</td>
+</tr>
+<tr>
+<td>Error flag</td>
+<td>Gateway biết dữ liệu c&#243; lỗi cảm biến</td>
+</tr>
+</table>
+<p></p>
+<h3>Flow xử l&#253; lỗi đơn giản</h3>
+<p></p>
+<pre>flowchart TD
+    A[Node đọc cảm biến] --&gt; B{Dữ liệu cảm biến OK?}
+    B -- Kh&#244;ng --&gt; C[Gửi DATA c&#243; ERR=1]
+    B -- C&#243; --&gt; D[Gửi DATA c&#243; ERR=0]
+    C --&gt; E[Gateway kiểm CRC]
+    D --&gt; E
+    E --&gt; F{CRC OK?}
+    F -- Kh&#244;ng --&gt; G[Bỏ packet]
+    F -- C&#243; --&gt; H[Lưu v&#224; phản hồi ACK]</pre>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.9. C&#225;c file phần mềm ch&#237;nh</h2>
+<p></p>
+<table>
+<tr>
+<td>File</td>
+<td>Vai tr&#242;</td>
+</tr>
+<tr>
+<td>`node_main.cpp`</td>
+<td>Chương tr&#236;nh ch&#237;nh của node</td>
+</tr>
+<tr>
+<td>`gateway_main.cpp`</td>
+<td>Chương tr&#236;nh ch&#237;nh của gateway</td>
+</tr>
+<tr>
+<td>`gateway_lora.cpp`</td>
+<td>Xử l&#253; nhận/gửi LoRa ph&#237;a gateway</td>
+</tr>
+<tr>
+<td>`gateway_web.cpp`</td>
+<td>Web dashboard, command, export CSV, OTA gateway</td>
+</tr>
+<tr>
+<td>`gateway_cloud.cpp`</td>
+<td>Upload dữ liệu l&#234;n ThingsBoard</td>
+</tr>
+<tr>
+<td>`gateway_state.cpp`</td>
+<td>Lưu trạng th&#225;i, history v&#224; command đang chờ</td>
+</tr>
+<tr>
+<td>`gateway_logic.cpp`</td>
+<td>T&#237;nh cảnh b&#225;o, command v&#224; thời gian bơm</td>
+</tr>
+<tr>
+<td>`dht22_sensor.cpp`</td>
+<td>Driver đọc DHT22</td>
+</tr>
+<tr>
+<td>`soil_moisture.cpp`</td>
+<td>Driver đọc cảm biến đất</td>
+</tr>
+<tr>
+<td>`packet_protocol.cpp`</td>
+<td>Encode/decode packet v&#224; CRC</td>
+</tr>
+<tr>
+<td>`project_config.h`</td>
+<td>Cấu h&#236;nh ch&#226;n GPIO, LoRa, WiFi, cloud, sleep, OTA</td>
+</tr>
+</table>
+<p></p>
+<hr>
+<p></p>
+<h2>B4.10. Kết luận ngắn gọn</h2>
+<p></p>
+<p>Phần mềm được chia th&#224;nh hai firmware: node v&#224; gateway.</p>
+<p></p>
+<p>• **Node** tập trung v&#224;o đo cảm biến, gửi dữ liệu v&#224; tiết kiệm năng lượng bằng deep sleep.</p>
+<p>• **Gateway** tập trung v&#224;o nhận dữ liệu, kiểm tra lỗi, hiển thị dashboard, gửi cloud v&#224; quản l&#253; command.</p>
+<p>• **LoRa packet** d&#249;ng dạng `KEY=VALUE` n&#234;n dễ debug.</p>
+<p>• **CRC, ACK, dedup v&#224; retry command** gi&#250;p hệ thống truyền dữ liệu ổn định hơn.</p>
+<p>• **Gateway OTA** l&#224; OTA thật qua WiFi/HTTP.</p>
+<p>• **Node OTA LoRa** hiện l&#224; m&#244; phỏng, d&#249;ng để tr&#236;nh b&#224;y quy tr&#236;nh truyền chunk v&#224; x&#225;c nhận dữ liệu.</p>
+<p></p>
+<p>C&#226;u chốt khi thuyết tr&#236;nh:</p>
+<p></p>
+<p>&gt; Hệ thống được thiết kế theo hướng node tiết kiệm năng lượng, gateway xử l&#253; trung t&#226;m. Node chỉ thức dậy để đo v&#224; gửi dữ liệu, c&#242;n gateway lu&#244;n hoạt động để nhận dữ liệu, hiển thị, gửi cloud v&#224; truyền lệnh điều khiển ngược lại cho node.</p>
+<p></p></body>
+</html>
