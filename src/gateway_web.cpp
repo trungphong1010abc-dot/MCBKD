@@ -72,7 +72,7 @@ static void handleRoot()
     html += "<title>EE4552 Gateway</title><style>body{font-family:Arial;margin:24px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px;text-align:left}</style></head><body>";
     html += "<h2>EE4552 Gateway Dashboard</h2><p><a href='/export.csv'>Export CSV</a></p>";
     html += "<p>Firmware: " + String(Config::GatewayFirmwareVersion) + "</p>";
-    html += "<p>Queue command: /command?node=1&amp;cmd=SET_SLEEP_DURATION&amp;param=10 or SET_THRESHOLD, SET_FILTER_MODE, SET_PUMP_TIME, SET_CONTROL_MODE, SET_DUTY_CYCLE, START_OTA</p>";
+    html += "<p>Queue command: /command?node=1&amp;cmd=SET_THRESHOLD&amp;param=20 or SET_FILTER_MODE, SET_PUMP_TIME, SET_CONTROL_MODE, START_OTA</p>";
     html += "<p>Gateway OTA: /self_ota?url=http://server/firmware.bin&amp;md5=optional_md5</p>";
     html += "<table><tr><th>ms</th><th>Node</th><th>PID</th><th>T</th><th>H_air</th><th>H_soil</th><th>Vbat</th><th>Status</th><th>RSSI</th><th>Sleep</th><th>Threshold</th><th>Pump</th><th>Control</th><th>Duty</th></tr>";
     for (size_t i = 0; i < historyCount; i++)

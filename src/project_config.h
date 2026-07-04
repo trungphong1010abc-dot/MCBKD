@@ -44,8 +44,6 @@ constexpr uint16_t CommandDedupWindow = 32;
 
 constexpr bool EnableDeepSleep = true;
 constexpr uint32_t DefaultSleepMinutes = 30;
-constexpr bool EnableFastUrgentSleepTest = false;
-constexpr uint32_t FastUrgentSleepSeconds = 5;
 
 constexpr char WifiSsid[] = "Khoa";
 constexpr char WifiPassword[] = "12112004";

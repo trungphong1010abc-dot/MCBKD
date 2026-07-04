@@ -22,7 +22,7 @@ struct NodeRuntimeConfig
     int filterMode = 0;  // 0=AVERAGE, 1=MEDIAN.
     int pumpSeconds = 5;
     int controlMode = 1; // 0=MANUAL, 1=AUTO.
-    int dutyCycleMode = 1; // 0=FIXED, 1=ADAPTIVE.
+    int dutyCycleMode = 0; // Fixed 30-minute cycle.
 };
 
 static NodeRuntimeConfig runtimeConfig;
@@ -31,12 +31,12 @@ static void loadRuntimeConfig()
 {
     preferences.begin("node_cfg", true);
     runtimeConfig.soilThresholdVol = preferences.getInt("soil_th", runtimeConfig.soilThresholdVol);
-    runtimeConfig.sleepMinutes = preferences.getUInt("sleep_min", runtimeConfig.sleepMinutes);
     runtimeConfig.filterMode = preferences.getInt("filter", runtimeConfig.filterMode);
     runtimeConfig.pumpSeconds = preferences.getInt("pump_s", runtimeConfig.pumpSeconds);
     runtimeConfig.controlMode = preferences.getInt("ctrl", runtimeConfig.controlMode);
-    runtimeConfig.dutyCycleMode = preferences.getInt("duty", runtimeConfig.dutyCycleMode);
     preferences.end();
+    runtimeConfig.sleepMinutes = Config::DefaultSleepMinutes;
+    runtimeConfig.dutyCycleMode = 0;
     rtcSleepMinutes = runtimeConfig.sleepMinutes;
 }
 
@@ -44,11 +44,11 @@ static void saveRuntimeConfig()
 {
     preferences.begin("node_cfg", false);
     preferences.putInt("soil_th", runtimeConfig.soilThresholdVol);
-    preferences.putUInt("sleep_min", runtimeConfig.sleepMinutes);
+    preferences.putUInt("sleep_min", Config::DefaultSleepMinutes);
     preferences.putInt("filter", runtimeConfig.filterMode);
     preferences.putInt("pump_s", runtimeConfig.pumpSeconds);
     preferences.putInt("ctrl", runtimeConfig.controlMode);
-    preferences.putInt("duty", runtimeConfig.dutyCycleMode);
+    preferences.putInt("duty", 0);
     preferences.end();
 }
 
@@ -106,52 +106,22 @@ static float readBatteryVoltage()
     return adcVoltage * Config::BatteryDividerRatio;
 }
 
-static uint32_t computeAdaptiveSleepMinutes(const TelemetryPacket &telemetry)
+static DhtReading readDht22WithRetry()
 {
-    if (telemetry.errorFlag != 0)
+    constexpr uint8_t maxAttempts = 3;
+    for (uint8_t attempt = 1; attempt <= maxAttempts; attempt++)
     {
-        return 30;
-    }
-    if (telemetry.batteryV < 3.3f)
-    {
-        return 90;
-    }
-    if (telemetry.batteryV < 3.5f)
-    {
-        return 60;
-    }
-    if (telemetry.soilStatus == "URGENT_WATERING")
-    {
-        return 5;
-    }
-    if (telemetry.soilStatus == "NEED_WATERING")
-    {
-        return 10;
-    }
-    if (telemetry.soilStatus == "LIGHT_DRY")
-    {
-        return 20;
-    }
-    if (telemetry.soilStatus == "OVER_MOISTURE")
-    {
-        return 60;
-    }
-    return 30;
-}
+        const DhtReading reading = dht22.read();
+        if (reading.errorFlag == 0)
+        {
+            return reading;
+        }
 
-static uint32_t computeAdaptiveSleepSeconds(const TelemetryPacket &telemetry)
-{
-    if (Config::EnableFastUrgentSleepTest && telemetry.soilStatus == "URGENT_WATERING" &&
-        telemetry.errorFlag == 0)
-    {
-        return Config::FastUrgentSleepSeconds;
+        Serial.printf("DHT read failed attempt %u/%u\n", attempt, maxAttempts);
+        delay(2000);
     }
 
-    if (runtimeConfig.dutyCycleMode == 0)
-    {
-        return runtimeConfig.sleepMinutes * 60UL;
-    }
-    return computeAdaptiveSleepMinutes(telemetry) * 60UL;
+    return DhtReading{};
 }
 
 static void sendOtaStatus(uint32_t otaId, uint16_t chunkIndex, bool ok, const String &status)
@@ -282,13 +252,10 @@ static void executeCommand(const AckPacket &ack)
     switch (ack.command)
     {
     case CommandType::SetSleepDuration:
-        if (ack.parameter >= 5 && ack.parameter <= 90)
-        {
-            rtcSleepMinutes = ack.parameter;
-            runtimeConfig.sleepMinutes = ack.parameter;
-            saveRuntimeConfig();
-            Serial.printf("Command SET_SLEEP_DURATION: %lu min\n", rtcSleepMinutes);
-        }
+        rtcSleepMinutes = Config::DefaultSleepMinutes;
+        runtimeConfig.sleepMinutes = Config::DefaultSleepMinutes;
+        saveRuntimeConfig();
+        Serial.printf("Command SET_SLEEP_DURATION ignored: fixed %lu min\n", rtcSleepMinutes);
         break;
     case CommandType::SetThreshold:
         runtimeConfig.soilThresholdVol = constrain(ack.parameter, 0, 100);
@@ -311,9 +278,9 @@ static void executeCommand(const AckPacket &ack)
         Serial.printf("Command SET_CONTROL_MODE: %s\n", runtimeConfig.controlMode == 1 ? "AUTO" : "MANUAL");
         break;
     case CommandType::SetDutyCycle:
-        runtimeConfig.dutyCycleMode = constrain(ack.parameter, 0, 1);
+        runtimeConfig.dutyCycleMode = 0;
         saveRuntimeConfig();
-        Serial.printf("Command SET_DUTY_CYCLE: %s\n", runtimeConfig.dutyCycleMode == 1 ? "ADAPTIVE" : "FIXED");
+        Serial.println("Command SET_DUTY_CYCLE ignored: FIXED");
         break;
     case CommandType::SleepNow:
         Serial.println("Command SLEEP_NOW");
@@ -450,16 +417,14 @@ void setup()
 
     if (!initLoRa())
     {
-        const uint32_t failureSleepMinutes = runtimeConfig.sleepMinutes > 0
-                                                 ? runtimeConfig.sleepMinutes
-                                                 : Config::DefaultSleepMinutes;
+        const uint32_t failureSleepMinutes = Config::DefaultSleepMinutes;
         Serial.printf("LoRa init failed; sleeping %lu min\n", failureSleepMinutes);
         enterSleep(failureSleepMinutes);
         return;
     }
     Serial.println("LoRa init OK");
 
-    const DhtReading dht = dht22.read();
+    const DhtReading dht = readDht22WithRetry();
     const SoilReading soil = soilSensor.read();
     const float batteryV = readBatteryVoltage();
 
@@ -492,7 +457,7 @@ void setup()
         Serial.println("No ACK; TX failed");
     }
 
-    enterSleepSeconds(computeAdaptiveSleepSeconds(telemetry));
+    enterSleep(Config::DefaultSleepMinutes);
 }
 
 void loop()
