@@ -26,7 +26,6 @@ void uploadThingsBoard(const TelemetryPacket &packet, int rssi)
                         ",\"T_air\":" + String(packet.temperatureC, 1) +
                         ",\"H_air\":" + String(packet.humidityRh, 1) +
                         ",\"H_soil\":" + String(packet.soilMoistureVol, 0) +
-                        ",\"V_bat\":" + String(packet.batteryV, 2) +
                         ",\"RSSI\":" + String(rssi) +
                         ",\"Error_Flag\":" + String(packet.errorFlag) +
                         ",\"Alert\":\"" + alertLevel(packet) + "\"" +

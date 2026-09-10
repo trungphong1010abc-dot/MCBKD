@@ -32,12 +32,6 @@ void setup()
 
 void loop()
 {
-    if (otaReadyWaitActive && int32_t(millis() - otaReadyWaitDeadlineMs) > 0)
-    {
-        otaReadyWaitActive = false;
-        Serial.println("OTA session failed: node did not report OTA_READY");
-    }
-
     if (Config::EnableGatewayHeartbeatLog && millis() - lastHeartbeatMs >= 2000)
     {
         lastHeartbeatMs = millis();

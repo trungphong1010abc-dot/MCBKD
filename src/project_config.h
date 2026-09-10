@@ -5,16 +5,14 @@
 namespace Config
 {
 constexpr uint32_t SerialBaud = 115200;
-constexpr char GatewayFirmwareVersion[] = "GW_OTA_TEST_1";
+constexpr char GatewayFirmwareVersion[] = "GW_1";
 
 constexpr uint8_t NodeId = 1;
 constexpr uint8_t GatewayId = 1;
 
 constexpr uint8_t DhtPin = 27;
 constexpr uint8_t SoilAdcPin = 34;
-constexpr uint8_t BatteryAdcPin = 35;
 constexpr uint8_t SensorPowerPin = 32;
-constexpr float BatteryDividerRatio = 3.2f; // Rtop=220k, Rbottom=100k.
 constexpr uint8_t PumpPin = 25;
 constexpr bool PumpActiveHigh = true;
 constexpr uint8_t MaxPumpSeconds = 15;

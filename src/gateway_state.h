@@ -24,8 +24,3 @@ extern portMUX_TYPE pendingCommandMux;
 extern uint32_t lastHeartbeatMs;
 extern uint32_t lastLoraRetryMs;
 extern bool loraReady;
-extern bool otaSessionActive;
-extern bool otaReadyWaitActive;
-extern uint8_t otaReadyWaitNodeId;
-extern uint32_t otaReadyWaitId;
-extern uint32_t otaReadyWaitDeadlineMs;

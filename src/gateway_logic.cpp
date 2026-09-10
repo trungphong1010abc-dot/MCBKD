@@ -111,6 +111,6 @@ void queueGatewayCommand(uint8_t nodeId, CommandType command, int parameter)
     pendingCommands[nodeId].parameter = parameter;
     pendingCommands[nodeId].ok = true;
     pendingCommands[nodeId].status = "QUEUED";
-    pendingCommandRepeats[nodeId] = command == CommandType::StartOta ? 10 : 3;
+    pendingCommandRepeats[nodeId] = 3;
     portEXIT_CRITICAL(&pendingCommandMux);
 }
